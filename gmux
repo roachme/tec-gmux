@@ -1,600 +1,372 @@
-#!/bin/python3
+#!/bin/bash
 
-"""
-Gmux - git multiplexer. Execute commands on multiple repos in parallel.
-"""
+PGNAME="tman-gmux"
+VERSION="v0.0.1"
+COMMAND=
+TASKDIR=
+PRJNAME=
+TASKNAME=
+ISDEBUG=true
+CONFIG_FILE="/home/roach/.local/lib/tman/pgn/gmux/gmux.json"
 
-import os
-import re
-import sys
-import json
-import getopt
-import pygit2
-import json
-
-# TODO: add support to execute real git commands on all or specific repo
-
-PluginName = "gmux"
-Version = "v0.0.1"
-
-"""
-config
-
-dirdb       # for builtin and plugin unit files
-config      # project config
-
-dirs: .tman/pgn - make sure it's created
-files: .tman/unit, .tman/pgn/gmux
-args - prj, brd, id
-
-"""
+COMMITPATT="[ID] PART: MSG"
+BRANCHPATT="TYPE/PREFIX-ID_DESC_DATE"
 
 
-"""
-classes:
-    config: (read from file, if not then set defaults)
-    unit: (read from and write to)
-    basic: (for dirs and files)
-"""
+declare -A PGNUNITS
 
-"""
-taskdir - where task are stored
-pgndir  - where plugin date is located
-repodir - where is repo symlink located in task
-"""
+function unit_load()
+{
+    local fname="$1"
+
+    while IFS=" : " read -r key val; do
+        [[ -n "$key" ]] && PGNUNITS["$key"]="$val"  # Skip empty lines
+    done < "$fname"
+}
+
+function unit_save()
+{
+    local fname="$1"
+
+    # Empty the file first
+    : > "$fname"
+
+    for unit in "${!PGNUNITS[@]}"; do
+        echo "$unit : ${PGNUNITS["$unit"]}" >> "$fname"
+    done
+}
+
+function unit_set()
+{
+    local fname="$1"
+    local ukey="$2"
+    local uval="$3"
+
+    unit_load "$fname"
+    PGNUNITS["$ukey"]="$uval"
+    unit_save "$fname"
+}
+
+function elog()
+{
+    echo "$PGNAME:" "$@" >&2
+}
+
+function dlog()
+{
+    if [ "$ISDEBUG" == true ]; then
+        echo "$PGNAME:" "$@"
+    fi
+}
+
+function usage()
+{
+cat << EOF
+Usage: tman gmux [OPTION]...
+    commit      create task commit based on commit pattern
+    delete      delete task branch
+    help        show this help message and exit
+    show        show unit values
+    sync        create and update task branch
+    rsync       update from romote branch and merge with default branch
+EOF
+}
+
+# TODO: Add support for config values from gmux.json
+# FIXME: add prefix and other project wide stuff
+function generate_branch()
+{
+    #local prjcfg="$1"
+    declare -A units  # Declare associative array
+    declare -A pgnunits  # Declare associative array
+    local branchpatt="$BRANCHPATT"
+
+    while IFS=" : " read -r key val; do
+        [[ -n "$key" ]] && units["$key"]="$val"  # Skip empty lines
+    done < "$SYSFILE"
+
+    while IFS="=" read -r key val; do
+        [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+        #dlog "-- pgnunits: $key -> $val"
+    done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
 
 
-"""
-TODO:
-    5. Add support for worktree.
-    6. Add support for submodules.
-"""
+    # TODO: set default values
+    units["id"]="$TASKNAME"
+    units["prefix"]="PRE"
 
-class Config:
-    def __init__(self, taskdir):
-        self.taskdir = taskdir
-        self.config = {}
-        self.prjconf = {}
+    IFS='-/_' read -ra items <<< "$branchpatt"
+    for item in "${items[@]}"; do
+        lower_item="${item,,}" # to lower case
+        branchpatt="${branchpatt/$item/${units["$lower_item"]}}"
+    done
 
-    def find_file(self):
-        files = {
-            "{}/.tman/pgns/gmux.json".format(os.environ["HOME"]),
-            "{}/.config/tman/pgns/gmux.json".format(os.environ["HOME"]),
-        }
-        for file in files:
-            if os.path.exists(file):
-                return file
-        return None
+    # Delete whitespaces in description
+    echo "${branchpatt// /_}"
+}
 
-
-    def set_defaults(self, prj, taskid):
-        # basic.repodir = basic.base .. '/' .. '.pgn/gun'
-        # TODO: rename gun to gmux
-        self.config.update({"pgndir" : "/".join([self.taskdir, ".pgn/gun"])})
-
-        # Set defaults
-        if self.config.get(prj) is None:
-            self.config[prj] = {}
-        if self.config[prj].get("repos") is None:
-            self.config[prj]["repos"] = {}
-        if self.config[prj].get("prefix") is None:
-            self.config[prj]["prefix"] = "TE"
-        if self.config[prj].get("branchpatt") is None:
-            self.config[prj]["branchpatt"] = "TYPE/PREFIX-ID_DESC_DATE"
-
-        for repo in self.config[prj]["repos"]:
-            repo["path"] = "/".join([self.config["pgndir"], repo["name"]])
-
-        self.config[prj]["pgndir"] = "/".join([self.taskdir, ".pgn/gun"])
-
-        return self.config[prj]
-
-    def set_unit_defaults(self, prj, taskid):
-        pass
-
-    def get(self, prj, taskid):
-        fname = self.find_file()
-        if fname is None:
-            return self.set_defaults(prj, taskid)
-
-        with open(fname, 'r') as file:
-            self.config = json.load(file)
-            return self.set_defaults(prj, taskid)
-        return self.prjconf
-
-    def set(self):
-        pass
-
-
-# Separet branch pattern into items
-def pattsplit(inputstr, sep):
-    return re.split("[-_/]", inputstr)
-
-def branch_generate(branchpatt, sysunits):
-    separators = "/_-"
-    sepcomponents = pattsplit(branchpatt, separators)
-
-    for item in sepcomponents:
-        uitem = sysunits[item.lower()]
-
-        # roachme: HOTFIX: desc: replace whitespace with undrescore
-        if item == "DESC":
-            uitem = uitem.replace(" ", "_")
-        #print("branch_generate:sep", item, uitem)
-        branchpatt = branchpatt.replace(item, uitem)
-    return branchpatt
-
-def die(msg):
-    print(f"{PluginName}: ", end='')
-    print(msg)
-    sys.exit(1)
-
-def usage():
-    print(
-        f"Usage: {PluginName} [OPTION]... COMMAND [OPTION]... [ARG]...\n"
-        "\n"
-        "Options:\n"
-        "  -h       show this help message and exit\n"
-        "  -q       do not output to standart error output\n"
-        "  -T       path to task directory\n"
-        "  -V       show verison and exit\n"
-        "\n"
-        "COMMANDs:\n"
-        "  commit   commit changes\n"
-        "  delete   delete branches\n"
-        "  help     show this help message and exit\n"
-        "  merge    merge branches\n"
-        "  show     show plugin units\n"
-        "  sync     create and sync task branches\n"
-        "  rsync    remotely sync task branches")
+function gmux_commit()
+{
     return 0
-
-def version():
-    print(f"{PluginName}: {Version}")
-
-
-class GMUXHelper:
-    def clone(self, repos):
-        for repo in repos:
-            try:
-                if not os.path.isdir(repo["path"]):
-                    print("link", repo["link"])
-                    print("path", repo["path"])
-                    _repo = pygit2.clone_repository(repo["link"], repo["path"])
-            except pygit2.GitError as e:
-                print(f"error repo: {e}")
-
-    def symlink(self, repos, task_repodir):
-        if not os.path.isdir(task_repodir):
-            os.mkdir(task_repodir)
-        print("[-] create symlinks")
-        for repo in repos:
-            src = repo["path"]
-            dst = "/".join([task_repodir, repo["name"]])
-            print("src", src)
-            print("dst", dst)
-            if not os.path.islink(dst):
-                os.symlink(src, dst)
-
-    def check_changes(self, repos, repodir):
-        print("[-] check changes")
-        status = True
-
-        for repo in repos:
-            _repo = pygit2.Repository("/".join([ repodir, repo['name'] ]))
-            if len(_repo.status()) > 0:
-                print("uncommitted changes in repo:", repo['name'])
-                status = False
-        return status
-
-
-    def branch_create(self, repos, repodir, branchname):
-        print("[-] make branches")
-        for repo in repos:
-            print("branchname:", branchname)
-            _repo = pygit2.Repository("/".join([ repodir, repo['name'] ]))
-
-            # Get the OID of the commit that HEAD currently points to
-            head_commit_oid = _repo.head.target
-
-            if not _repo.branches.get(branchname):
-                _repo.create_branch(branchname, _repo.get(head_commit_oid))
-
-    def branch_delete(self, repos, repodir, branchname):
-        print("[-] delete branches")
-        for repo in repos:
-            _repo = pygit2.Repository("/".join([ repodir, repo['name'] ]))
-            # TODO: Delete branch
-
-    def branch_rename(self, repos, repodir, oldbranch, newbranch):
-        print("[-] rename branches")
-        for repo in repos:
-            _repo = pygit2.Repository("/".join([ repodir, repo['name'] ]))
-            try:
-                branch = _repo.branches[oldbranch]
-                branch.rename(newbranch)
-            except KeyError:
-                print(f"branch name {oldbranch} not found")
-        pass
-
-    def branch_switch(self, repos, repodir, branchname):
-        print("[-] make branches")
-        for repo in repos:
-            _repo = pygit2.Repository("/".join([ repodir, repo['name'] ]))
-            try:
-                branch = _repo.branches[branchname]
-            except KeyError:
-                print(f"ERROR: could not find branch name {branchname}")
-                exit()
-            _repo.checkout(branch.name)
-
-    def get_config(self):
-        fname = "{}/.config/tman/pgns/gmux.json".format(os.environ["HOME"])
-        if not os.path.isfile(fname):
-            return {}
-        try:
-            with open(fname, 'r') as file:
-                config = json.load(file)
-                return config
-        except:
-            print("error: error in config")
-            return None
-
-    def generate_basic(self, prj, brd, taskid, taskdir):
-        config = GMUXHelper.get_config(self).get(prj) or {}
-        config.update({"taskdir": "/".join([taskdir, prj, taskid]) })
-        config.update({"unitdir": "/".join([config["taskdir"], '.tman']) })
-        config.update({"sysfile": "/".join([config['unitdir'], '.tman']) })
-        config.update({"fpgn": "/".join([config['unitdir'], 'pgn/gun']) }) # TODO: Rename it to gmux
-        return config
-
-    def merge_merge(self):
-        pass
-
-    def merge_rebase(self):
-        pass
-
-    def merge_cherrypick(self):
-        pass
-
-class Arguments:
-    def __init__(self):
-        self.prj = None
-        self.brd = None
-        self.id = None
-
-    def set_prj(self, prj):
-        self.prj = prj
-
-    def set_brd(self, brd):
-        self.brd = brd
-
-    def set_id(self, taskid):
-        self.id = taskid
-
-    def check(self):
-        if self.prj is None:
-            die("no current project")
-        elif self.id is None:
-            die("no current task ID")
-        return True
-
-class Unit:
-    def __init__(self, taskdir = None, prj = None, brd = None, id = None):
-        self.fname = None
-        self.taskdir = taskdir
-        self.sysunit_fname = "/".join([self.taskdir, prj, id, ".tman/unit"])
-        self.pgnunit_fname = "/".join([self.taskdir, prj, id, ".tman/pgn/gun"]) # TODO: replace gun with gmux
-
-    def _get(self, fname):
-        units = {}
-        if not os.path.isfile(fname):
-            print(f"plugin unit file is missing '{fname}'")
-            return None
-        with open(fname, 'r') as file:
-            for line in file:
-                key, val = line.strip().split(" : ")
-                units.update({key : val})
-        return units
-
-    def get_sys(self):
-        return self._get(self.sysunit_fname)
-
-    def get_pgn(self):
-        return self._get(self.pgnunit_fname)
-
-
-    def get(self):
-        units_pgn = self._get(self.sysunit_fname)
-        units_sys = self._get(self.pgnunit_fname)
-        return units_pgn | units_sys
-
-    def set(self, units):
-        if not os.path.isfile(self.pgnunit_fname):
-            print(f"plugin unit file is missing '{self.pgnunit_fname}'")
-            return None
-        with open(self.pgnunit_fname, 'w') as file:
-            for unit in units:
-                file.write(unit + " : " + units[unit] + '\n')
-
-    def save(self):
-        pass
-
-
-def _config_default():
-    pass
-
-def _load_config(filename):
-    with open(filename, 'r') as file:
-        pass
-
-def load_config():
-    files = {
-        "/home/roach/.tman/pgn/gmux.json",
-        "/home/roach/.config/tman/pgn/gmux.json",
-    }
-    for file in files:
-        if os.path.exists(file):
-            return _load_config(file)
-    return _config_default()
-
-"""
-dirs: .tman/pgn - make sure it's created
-files: .tman/unit, .tman/pgn/gmux
-args - prj, brd, id
-"""
-class GMUX(GMUXHelper):
-    def __init__(self, sysopts):
-        self.taskdir = sysopts.get("taskdir")
-
-    def commit(self, basic, arguments):
-        args = {}
-        squashcommit = False
-
-        try:
-            opts, _args = getopt.getopt(arguments, ":b:i:p:S")
-            for opt, arg in opts:
-                if opt == "-b":
-                    args.update({"brd": arg})
-                elif opt == "-i":
-                    args.update({"id": arg})
-                elif opt == "-p":
-                    args.update({"prj": arg})
-                elif opt == "-S":
-                    squashcommit = True
-                else:
-                    die(f"option {opt} requires an argument")
-            # Check input arguments
-            # TODO: Add check for board
-            if args.get("id") is None:
-                die("no current task ID")
-            elif args.get("prj") is None:
-                die("no current project")
-        except getopt.GetoptError as err:
-            die(f"{err}")
-
-        # TODO: load it from config
-        #commitpatt =  "[ID] PART: DESC"
-
-        #sysunitfile = "/".join([self.taskdir, args["prj"], args["id"], ".tman/unit"])
-        #sysunits = Unit(self.taskdir, args["prj"], None, args["id"]).load()
-        ## TODO: load prefix from config or use default
-        #sysunits["prefix"] = "TE"
-        #sysunits["id"] = args.get("id")
-
-        #unitfile = "/".join([self.taskdir, args["prj"], args["id"], ".tman/pgn/gun"])
-        ##units = Unit(unitfile, self.taskdir, args["prj"], None, args["id"]).load()
-        #print("gmux.commit: done")
-
-
-    def delete(self, basic, arguments):
-        args = {}
-
-        try:
-            opts, _args = getopt.getopt(arguments, ":b:i:p:")
-            for opt, arg in opts:
-                if opt == "-b":
-                    args.update({"brd": arg})
-                elif opt == "-i":
-                    args.update({"id": arg})
-                elif opt == "-p":
-                    args.update({"prj": arg})
-                else:
-                    die(f"option {opt} requires an argument")
-            # Check input arguments
-            # TODO: Add check for board
-            if args.get("id") is None:
-                die("no current task ID")
-            elif args.get("prj") is None:
-                die("no current project")
-        except getopt.GetoptError as err:
-            die(f"{err}")
-
-    def help(self, basic, arguments):
-        return usage()
-
-    # TODO: direction: forward and reverse, i.e.
-    #     1. rebase against main branch
-    #     2. or update task branch
-    # TODO: add option like: rebase, merge and cherrypick
-    def merge(self, basic, arguments):
-        args = {}
-        reverse = False
-        mergetype = "rebase"
-
-        try:
-            opts, _args = getopt.getopt(arguments, ":b:i:p:Rt:")
-            for opt, arg in opts:
-                if opt == "-b":
-                    args.update({"brd": arg})
-                elif opt == "-i":
-                    args.update({"id": arg})
-                elif opt == "-p":
-                    args.update({"prj": arg})
-                elif opt == "-R":
-                    reverse = True
-                elif opt == "-t":
-                    mergetype = arg
-                    if mergetype != 'rebase' and mergetype != 'merge' and mergetype != 'cherry':
-                        die(f"'{mergetype}': no such merge type")
-                else:
-                    die(f"option {opt} requires an argument")
-            # Check input arguments
-            # TODO: Add check for board
-            if args.get("id") is None:
-                die("no current task ID")
-            elif args.get("prj") is None:
-                die("no current project")
-        except getopt.GetoptError as err:
-            die(f"{err}")
-
-
-    def show(self, basic, arguments):
-        args = Arguments()
-
-        try:
-            opts, _args = getopt.getopt(arguments, ":b:i:p:")
-            for opt, arg in opts:
-                if opt == "-b":
-                    die("this option is under development")
-                elif opt == "-i":
-                    args.set_id(arg)
-                elif opt == "-p":
-                    args.set_prj(arg)
-                else:
-                    die(f"option {opt} requires an argument")
-            args.check()
-        except getopt.GetoptError as err:
-            die(f"{err}")
-
-        units = Unit(self.taskdir, args.prj, None, args.id).get_pgn()
-
-        for key in units:
-            print(f"{key} : {units[key]}")
-        return 0
-
-
-    def sync(self, basic, arguments):
-        args = Arguments()
-
-        try:
-            opts, _args = getopt.getopt(arguments, ":b:i:p:")
-            for opt, arg in opts:
-                if opt == "-b":
-                    die("this option is under development")
-                elif opt == "-i":
-                    args.set_id(arg)
-                elif opt == "-p":
-                    args.set_prj(arg)
-                else:
-                    die(f"option {opt} requires an argument")
-            args.check()
-        except getopt.GetoptError as err:
-            die(f"{err}")
-
-        config = Config(basic["taskdir"]).get(args.prj, args.id)
-        units = Unit(self.taskdir, args.prj, None, args.id).get()
-
-        units["id"] = args.id
-        units["prefix"] = config["prefix"]
-        branchname = branch_generate(config["branchpatt"], units)
-
-        # Make sure all needed repos are cloned
-        GMUXHelper.clone(self, config["repos"])
-
-        # Create all needed symlinks in task directory
-        task_repodir = "/".join([self.taskdir, args.prj, args.id, "repos"])
-        GMUXHelper.symlink(self, config["repos"], task_repodir)
-
-        # check that all repos has no changes
-        if GMUXHelper.check_changes(self, config["repos"], task_repodir) == False:
-            print("ERROR: has uncommitted changes")
-            return 1
-
-        if units.get("branch") and units.get("branch") != branchname:
-            print("--------------- rename")
-            print("units['branch']", units["branch"])
-            print("branchname     ", branchname)
-            GMUXHelper.branch_rename(self, config["repos"], task_repodir, units["branch"], branchname)
-        else:
-            GMUXHelper.branch_create(self, config["repos"], task_repodir, branchname)
-
-        GMUXHelper.branch_switch(self, config["repos"], task_repodir, branchname)
-
-        # TODO: Rebase against default branch (use an option for it)
-
-
-        # TODO: add checker in case when branch hasn't changed
-        # TODO: optimize it
-        if units.get("branch") != branchname:
-            # HOTFIX: To separate system and plugin units
-            units_pgn = {}
-            units_pgn.update({"branch": units["branch"]})
-
-            units["branch"] = branchname
-            unitobj = Unit(self.taskdir, args.prj, None, args.id)
-            unitobj = unitobj.set(units_pgn)
-        return True
-
-
-    def rsync(self, basic, arguments):
-        pass
-
-
-
-def main():
-    basic = {}
-    verbose = False
-
-    # Parse plugin options
-    i = 1
-    option = sys.argv[i]
-    while i < len(sys.argv) and sys.argv[i][0:1] == '-':
-        option = sys.argv[i]
-        if option == "-h":
-            return usage()
-        if option == "-q":
-            die(f"option {option} is under development")
-        elif option == "-v":
-            verbose = True
-        elif option == "-P":
-            if i + 1 == len(sys.argv):
-                die(f"option `{option}' requires an arguments")
-            basic.update({"pgndir": sys.argv[i + 1]})
-            i = i + 1
-        elif option == "-T":
-            if i + 1 == len(sys.argv):
-                die(f"option `{option}' requires an arguments")
-            basic.update({"taskdir": sys.argv[i + 1]})
-            i = i + 1
-        elif option == "-V":
-            return version()
-        else:
-            die(f"no such option: `{option}' {sys.argv[i + 1]}")
-        i = i + 1
-
-    command = sys.argv[i] if i < len(sys.argv) else die("no command passed")
-    arguments = sys.argv[i + 1:]
-
-    gmux = GMUX(basic)
-    commands = [
-        { "name" : "commit", "func" : gmux.commit },
-        { "name" : "delete", "func" : gmux.delete },
-        { "name" : "help", "func" : gmux.help },
-        { "name" : "merge", "func" : gmux.merge },
-        { "name" : "show", "func" : gmux.show },
-        { "name" : "sync", "func" : gmux.sync },
-        { "name" : "rsync", "func" : gmux.rsync },
-    ]
-
-    for cmd in commands:
-        if command == cmd["name"]:
-            return cmd["func"](basic, arguments)
-
-    die(f"'{command}': no such command")
-
-
-
-if __name__ == "__main__":
-    main()
-    pass
+}
+
+function gmux_delete()
+{
+    REPODIR="$TASKDIR/$PRJNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tman/unit"
+    PGNFILE="$REPODIR/.tman/pgn/gun"
+    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    BRANCH_GEN=$(generate_branch)
+    BRANCH_ORG="$(cat "$PGNFILE" | grep branch | tr -s ' ' | cut -f 3 -d ' ')"
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$PGNDIRBASE"
+        local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
+
+        CHANGES="$(git -C "$repodir" status --porcelain --untracked-files=all)"
+        if [ -z "$CHANGES" ]; then
+            git -C "$repodir" checkout -q "${pgnunits["branch"]}"
+            git -C "$repodir" branch -q -D "$BRANCH_ORG"
+        else
+            elog "'${pgnunits["branch"]}': could not delete task branch cuz of uncommited changes"
+        fi
+        # TODO: delete branch name from gmux unit file ??
+    done <<< "$REPOS"
+}
+
+function gmux_help()
+{
+    usage
+}
+
+# TODO: add merge strategies: merge, rebase, cherry-pick
+function gmux_merge()
+{
+    MERGEMODE="$1"
+    REPODIR="$TASKDIR/$PRJNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tman/unit"
+    PGNFILE="$REPODIR/.tman/pgn/gun"
+    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
+    #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
+
+    if [ -z "$MERGEMODE" ]; then
+        MERGEMODE="-r" # default is rebase mode
+    elif [ "$MERGEMODE" != "-m" ] && [ "$MERGEMODE" != "-c" ]; then
+        elog "'$MERGEMODE': no such merge option"
+    fi
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$PGNDIRBASE"
+
+        BRANCH_GEN=$(generate_branch)
+        local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
+
+        CHANGES="$(git -C "$repodir" status --porcelain --untracked-files=all)"
+        # TODO: show error in case merge conflict occurs
+        if [ -z "$CHANGES" ]; then
+            git -C "$repodir" checkout -q "${pgnunits["branch"]}"
+            if [ "$MERGEMODE" = "-r" ]; then
+                git -C "$repodir" rebase -q "$BRANCH_GEN"
+            elif [ "$MERGEMODE" = "-m" ]; then
+                git -C "$repodir" merge -q "$BRANCH_GEN"
+            elif [ "$MERGEMODE" = "-c" ]; then
+                elog "under development"
+            else
+                # TODO: Move option check up
+                elog "'$MERGEMODE': no such merge option"
+            fi
+            git -C "$repodir" checkout -q "$BRANCH_GEN"
+        fi
+    done <<< "$REPOS"
+}
+
+function gmux_show()
+{
+    cat "$TASKDIR/$PRJNAME/$TASKNAME/.tman/pgn/gun"
+}
+
+function gmux_sync()
+{
+    REPODIR="$TASKDIR/$PRJNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tman/unit"
+    PGNFILE="$REPODIR/.tman/pgn/gun"
+    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
+    #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$PGNDIRBASE"
+
+
+        BRANCH_GEN=$(generate_branch)
+        local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
+
+        dlog "BRANCH_ORG: $BRANCH_ORG"
+        dlog "BRANCH_GEN: $BRANCH_GEN"
+        dlog
+
+        # clone repos
+        if [ ! -d "${pgnunits["path"]}/${pgnunits["name"]}" ]; then
+            dlog "clone repo '${pgnunits["name"]}'"
+            git clone -q "${pgnunits["link"]}" "${pgnunits["path"]}/${pgnunits["name"]}"
+        fi
+
+        # symlink 'em to task directory
+        if [ ! -L "$repodir" ]; then
+            dlog "link repodir: $repodir"
+            ln -s "${pgnunits["path"]}/${pgnunits["name"]}" "$repodir"
+        fi
+
+        # Create or rename task branch
+        # TODO: check for changes in submodules
+        # TODO: make sure created branch does not exist yet
+        # TODO: add support for submodules
+        # TODO: Add case when branch exists but gmux unit file is empty
+        CHANGES="$(git -C "$repodir" status --porcelain --untracked-files=all)"
+        if [ -z "$CHANGES" ]; then
+            if [ -n "$BRANCH_ORG" ] && [ "$BRANCH_ORG" != "$BRANCH_GEN" ]; then
+                dlog "rename task branch"
+                git -C "$repodir" branch -m "$BRANCH_ORG" "$BRANCH_GEN"
+            elif [ -z "$BRANCH_ORG" ]; then
+                dlog "create task branch"
+                git -C "$repodir" checkout -q -b "$BRANCH_GEN" "${pgnunits["branch"]}"
+            elif ! git -C "$repodir" branch -l | grep -q "$BRANCH_GEN"; then
+                git -C "$repodir" checkout -q -b "$BRANCH_GEN" "${pgnunits["branch"]}"
+            fi
+
+            # Update branch in gmux unit file
+            unit_set "$REPODIR/.tman/pgn/gun" "branch" "$BRANCH_GEN"
+        else
+            elog "$PGNAME: '$name': repo has uncommited changes"
+        fi
+    done <<< "$REPOS"
+}
+
+function gmux_rsync()
+{
+    REPODIR="$TASKDIR/$PRJNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tman/unit"
+    PGNFILE="$REPODIR/.tman/pgn/gun"
+    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    BRANCH_GEN=$(generate_branch)
+    BRANCH_ORG="$(cat "$PGNFILE" | grep branch | tr -s ' ' | cut -f 3 -d ' ')"
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
+
+        # TODO: add support for merge tactics: rebase, merge, cherry-pick
+        # TODO: what to do if merge conflict occurs??
+        # TODO: add support for submodules
+        CHANGES="$(git -C "$repodir" status --porcelain --untracked-files=all)"
+        if [ -z "$CHANGES" ]; then
+            git -C "$repodir" checkout -q "${pgnunits["branch"]}"
+            git -C "$repodir" pull -q origin "${pgnunits["branch"]}"
+            git -C "$repodir" checkout -q "$BRANCH_ORG"
+            git -C "$repodir" rebase -q "${pgnunits["branch"]}"
+        else
+            elog "'${pgnunits["branch"]}': could not pull from remote branch cuz of uncommited changes"
+        fi
+    done <<< "$REPOS"
+}
+
+
+# Driver part of the code
+OPTS=$(getopt -o d:i:p:P:T:hV --long debug:prj:,taskid:,pgndir:,taskdir:help,version -n "$PGNAME" -- "$@")
+if [ $? -ne 0 ]; then
+    #echo "error parsing options" >&2
+    exit 1
+fi
+
+## Reset the positional parameters to the parsed options
+eval set -- "$OPTS"
+
+while true; do
+    case "$1" in
+        -d)
+            ISDEBUG="$2"
+            shift 2
+            ;;
+        -i)
+            TASKNAME="$2"
+            shift 2
+            ;;
+        -p)
+            PRJNAME="$2"
+            shift 2
+            ;;
+        -P)
+            PGNDIRBASE="$2"
+            shift 2
+            ;;
+        -T)
+            TASKDIR="$2"
+            shift 2
+            ;;
+        -V)
+            echo "$PGNAME: $VERSION"
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            elog "invalid option '$1'"
+            exit 1
+    esac
+done
+
+# TODO: add default command (maybe)
+COMMAND="$1"; shift
+
+
+if [ -z "$COMMAND" ]; then
+    elog "no command passed"
+    exit 1
+elif [ "$COMMAND" = "commit" ]; then
+    gmux_commit "$@"
+elif [ "$COMMAND" = "delete" ]; then
+    gmux_delete "$@"
+elif [ "$COMMAND" = "help" ]; then
+    gmux_help "$@"
+elif [ "$COMMAND" = "merge" ]; then
+    gmux_merge "$@"
+elif [ "$COMMAND" = "show" ]; then
+    gmux_show "$@"
+elif [ "$COMMAND" = "sync" ]; then
+    gmux_sync "$@"
+elif [ "$COMMAND" = "rsync" ]; then
+    gmux_rsync "$@"
+else
+    elog "'$COMMAND': no such command"
+    exit 1
+fi

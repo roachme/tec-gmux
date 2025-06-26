@@ -1,16 +1,45 @@
 {
-  "repos": [
-    {
-      "name": "OpenWRT",
-      "branch": "openwrt-23.05",
-      "link": "git@gitlab.wimark.com:embedded/OpenWRT.git",
-      "path": ""
+    "test": {
+        "prefix": "test",
+        "branchpatt": "TYPE/PREFIX-ID_DESC_DATE",
+
+        "repos": [
+            {
+                "name": "demo",
+                "branch": "main",
+                "commitpatt": "[ID] PART: MSG",
+                "link": "https://github.com/roachme/demo.git"
+            },
+            {
+                "name": "pman",
+                "branch": "master",
+                "commitpatt": "[ID] PART: MSG",
+                "link": "https://github.com/FNNDSC/pman.git"
+            }
+        ]
     },
-    {
-      "name": "demo",
-      "branch": "main",
-      "link": "https://github.com/roachme/demo.git",
-      "path": ""
+    "tman": {
+        "prefix": "T",
+        "branchpatt": "TYPE/PREFIX-ID_DESC_DATE",
+        "repos": [
+            {
+                "name": "pman",
+                "branch": "master",
+                "commitpatt": "[ID] PART: MSG",
+                "link": "https://github.com/FNNDSC/pman.git"
+            },
+            {
+                "name": "demo",
+                "branch": "main",
+                "commitpatt": "[ID] PART: MSG",
+                "link": "https://github.com/roachme/demo.git"
+            },
+            {
+                "name": "tman",
+                "branch": "develop",
+                "commitpatt": "[ID] PART: MSG",
+                "link": "https://github.com/roachme/tman.git"
+            }
+        ]
     }
-  ]
 }

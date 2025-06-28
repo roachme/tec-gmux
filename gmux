@@ -324,8 +324,13 @@ function gmux_sync()
             continue
         fi
 
-        # Switch to task branch
+        # Update task branch with default branch
         git -C "$repodir" checkout -q "$BRANCH_GEN"
+        if ! git -C "$repodir" rebase "${pgnunits['branch']}" > /dev/null 2>&1; then
+            git -C "$repodir" rebase --abort > /dev/null
+            elog "'${pgnunits["name"]}': could not update task branch with default"
+            continue
+        fi
     done <<< "$REPOS"
 }
 

@@ -140,6 +140,25 @@ function _gmux_init()
     fi
 }
 
+function _gmux_check_args()
+{
+    # TODO: check board name when support is added
+    if [ -z "$PRJNAME" ]; then
+        elog "no project name is passed"
+        exit 1
+    elif [ -z "$TASKNAME" ]; then
+        elog "no task ID is passed"
+        exit 1
+    elif [ -z "$PGNDIRBASE" ]; then
+        elog "no plugin directory is passed"
+        exit 1
+    elif [ -z "$TASKDIR" ]; then
+        elog "no task directory is passed"
+        exit 1
+    fi
+}
+
+
 function gmux_commit()
 {
     return 0
@@ -261,7 +280,6 @@ function gmux_sync()
             #dlog "-- pgnunits: $key -> $val"
         done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
         [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$PGNDIRBASE"
-
 
         BRANCH_GEN=$(generate_branch)
         local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
@@ -395,6 +413,7 @@ done
 # TODO: add default command (maybe)
 COMMAND="$1"; shift
 
+_gmux_check_args
 _gmux_init
 
 if [ -z "$COMMAND" ]; then

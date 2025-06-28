@@ -244,7 +244,7 @@ function gmux_merge()
                 # TODO: Move option check up
                 elog "'$MERGEMODE': no such merge option"
             fi
-            git -C "$repodir" checkout -q "$BRANCH_GEN"
+            git -C "$repodir" checkout -q "${pgnunits['branch']}"
         fi
     done <<< "$REPOS"
 }

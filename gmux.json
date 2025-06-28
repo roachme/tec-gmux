@@ -1,44 +1,13 @@
 {
     "test": {
-        "prefix": "test",
+        "prefix": "TEST",
         "branchpatt": "TYPE/PREFIX-ID_DESC_DATE",
-
         "repos": [
             {
                 "name": "demo",
                 "branch": "main",
                 "commitpatt": "[ID] PART: MSG",
                 "link": "https://github.com/roachme/demo.git"
-            },
-            {
-                "name": "pman",
-                "branch": "master",
-                "commitpatt": "[ID] PART: MSG",
-                "link": "https://github.com/FNNDSC/pman.git"
-            }
-        ]
-    },
-    "tman": {
-        "prefix": "T",
-        "branchpatt": "TYPE/PREFIX-ID_DESC_DATE",
-        "repos": [
-            {
-                "name": "pman",
-                "branch": "master",
-                "commitpatt": "[ID] PART: MSG",
-                "link": "https://github.com/FNNDSC/pman.git"
-            },
-            {
-                "name": "demo",
-                "branch": "main",
-                "commitpatt": "[ID] PART: MSG",
-                "link": "https://github.com/roachme/demo.git"
-            },
-            {
-                "name": "tman",
-                "branch": "develop",
-                "commitpatt": "[ID] PART: MSG",
-                "link": "https://github.com/roachme/tman.git"
             }
         ]
     }

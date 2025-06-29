@@ -44,6 +44,56 @@ function working_tree_clean()
     return 1
 }
 
+function branch_create_or_rename()
+{
+    local repodir="$1"
+    local branch_org="$2"
+    local branch_gen="$3"
+    local branch_def="$4"
+
+    if [ -n "$branch_org" ] && [ "$branch_org" != "$branch_gen" ]; then
+        dlog "'$repodir': rename task branch"
+        git -C "$repodir" branch -m "$branch_org" "$branch_gen"
+    elif [ -z "$branch_org" ]; then
+        dlog "'$repodir': create task branch"
+        git -C "$repodir" checkout -q -b "$branch_gen" "$branch_def"
+    elif ! git -C "$repodir" branch -l | grep -q "$branch_gen"; then
+        dlog "'$repodir': task branch: something i've no clue: $repodir"
+        dlog "'$repodir': branch_org: $branch_org"
+        dlog "'$repodir': branch_gen: $branch_gen"
+        git -C "$repodir" checkout -q -b "$branch_gen" "$branch_def"
+    fi
+}
+
+function branch_rsync()
+{
+    local repodir="$1"
+    local branch_org="$2"
+    local branch_gen="$3"
+    local branch_def="$4"
+
+    git -C "$repodir" checkout -q "$branch_def"
+    git -C "$repodir" pull -q origin "$branch_def"
+    git -C "$repodir" checkout -q "$branch_org"
+    git -C "$repodir" rebase -q "$branch_def"
+}
+
+function branch_merge()
+{
+    local repodir="$1"
+    local branch_org="$2"
+    local branch_gen="$3"
+    local branch_def="$4"
+
+    git -C "$repodir" checkout -q "$branch_gen"
+    if ! git -C "$repodir" rebase "$branch_def" > /dev/null 2>&1; then
+        git -C "$repodir" rebase --abort > /dev/null
+        return 1
+    fi
+    return 0
+}
+
+
 function unit_load()
 {
     local fname="$1"
@@ -199,8 +249,20 @@ function gmux_delete()
         if working_tree_clean "$repodir"; then
             git -C "$repodir" checkout -q "${pgnunits["branch"]}"
             git -C "$repodir" branch -q -D "$BRANCH_ORG"
+
+            # Delete task branch from all submodules
+            if working_tree_clean "$repodir"; then
+                git -C "$repodir" submodule foreach --quiet 'echo $path' | while read -r reponame; do
+                    git -C "$repodir/$reponame" checkout -q "${pgnunits["branch"]}"
+                    git -C "$repodir/$reponame" branch -q -D "$BRANCH_ORG"
+                done
+            else
+                elog "'${pgnunits["branch"]}':submodule: could not delete task branch cuz of uncommited changes"
+                continue
+            fi
         else
             elog "'${pgnunits["branch"]}': could not delete task branch cuz of uncommited changes"
+            continue
         fi
         # TODO: delete branch name from gmux unit file ??
     done <<< "$REPOS"
@@ -264,7 +326,6 @@ function gmux_push()
     echo "under development: update remote repo with task branch"
 }
 
-
 function gmux_show()
 {
     cat "$TASKDIR/$PRJNAME/$TASKNAME/.tman/pgn/gun"
@@ -311,32 +372,34 @@ function gmux_sync()
         fi
 
         # Create or rename task branch
-        # TODO: check for changes in submodules
         # TODO: make sure created branch does not exist yet
-        # TODO: add support for submodules
         # TODO: Add case when branch exists but gmux unit file is empty
         if working_tree_clean "$repodir"; then
-            if [ -n "$BRANCH_ORG" ] && [ "$BRANCH_ORG" != "$BRANCH_GEN" ]; then
-                dlog "rename task branch"
-                git -C "$repodir" branch -m "$BRANCH_ORG" "$BRANCH_GEN"
-            elif [ -z "$BRANCH_ORG" ]; then
-                dlog "create task branch"
-                git -C "$repodir" checkout -q -b "$BRANCH_GEN" "${pgnunits["branch"]}"
-            elif ! git -C "$repodir" branch -l | grep -q "$BRANCH_GEN"; then
-                git -C "$repodir" checkout -q -b "$BRANCH_GEN" "${pgnunits["branch"]}"
+            branch_create_or_rename "$repodir" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}"
+
+            if working_tree_clean "$repodir"; then
+                git -C "$repodir" submodule foreach --quiet 'echo $path' | while read -r reponame; do
+                    branch_create_or_rename "$repodir/$reponame" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}"
+                    # Update task branch with default branch
+                    if branch_merge "$repodir/$reponame" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}"; then
+                        elog "'${pgnunits["name"]}': could not update task branch with default"
+                        continue
+                    fi
+                done
+            else
+                elog "'${pgnunits["name"]}': submodule has uncommited changes"
+                continue
             fi
 
             # Update branch in gmux unit file
             unit_set "$REPODIR/.tman/pgn/gun" "branch" "$BRANCH_GEN"
         else
-            elog "$PGNAME: '${pgnunits["name"]}': repo has uncommited changes"
+            elog "'${pgnunits["name"]}': repo has uncommited changes"
             continue
         fi
 
         # Update task branch with default branch
-        git -C "$repodir" checkout -q "$BRANCH_GEN"
-        if ! git -C "$repodir" rebase "${pgnunits['branch']}" > /dev/null 2>&1; then
-            git -C "$repodir" rebase --abort > /dev/null
+        if branch_merge "$repodir" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}"; then
             elog "'${pgnunits["name"]}': could not update task branch with default"
             continue
         fi
@@ -390,7 +453,7 @@ eval set -- "$OPTS"
 while true; do
     case "$1" in
         -d)
-            ISDEBUG="$2"
+            ISDEBUG=true
             shift 1
             ;;
         -i)
@@ -428,6 +491,7 @@ COMMAND="$1"; shift
 
 _gmux_check_args
 _gmux_init
+
 
 if [ -z "$COMMAND" ]; then
     elog "no command passed"

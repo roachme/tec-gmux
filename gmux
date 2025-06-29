@@ -32,6 +32,18 @@ function find_config()
     done
 }
 
+function working_tree_clean()
+{
+    local repodir="$1"
+    local changes=
+
+    changes="$(git -C "$repodir" status --ignore-submodules --porcelain --untracked-files=all)"
+    if [ -z "$changes" ]; then
+        return 0;
+    fi
+    return 1
+}
+
 function unit_load()
 {
     local fname="$1"
@@ -184,8 +196,7 @@ function gmux_delete()
         [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$PGNDIRBASE"
         local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
 
-        CHANGES="$(git -C "$repodir" status --porcelain --untracked-files=all)"
-        if [ -z "$CHANGES" ]; then
+        if working_tree_clean "$repodir"; then
             git -C "$repodir" checkout -q "${pgnunits["branch"]}"
             git -C "$repodir" branch -q -D "$BRANCH_ORG"
         else
@@ -230,9 +241,8 @@ function gmux_merge()
         BRANCH_GEN=$(generate_branch)
         local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
 
-        CHANGES="$(git -C "$repodir" status --porcelain --untracked-files=all)"
         # TODO: show error in case merge conflict occurs
-        if [ -z "$CHANGES" ]; then
+        if working_tree_clean "$repodir"; then
             git -C "$repodir" checkout -q "${pgnunits["branch"]}"
             if [ "$MERGEMODE" = "-r" ]; then
                 git -C "$repodir" rebase -q "$BRANCH_GEN"
@@ -305,8 +315,7 @@ function gmux_sync()
         # TODO: make sure created branch does not exist yet
         # TODO: add support for submodules
         # TODO: Add case when branch exists but gmux unit file is empty
-        CHANGES="$(git -C "$repodir" status --porcelain --untracked-files=all)"
-        if [ -z "$CHANGES" ]; then
+        if working_tree_clean "$repodir"; then
             if [ -n "$BRANCH_ORG" ] && [ "$BRANCH_ORG" != "$BRANCH_GEN" ]; then
                 dlog "rename task branch"
                 git -C "$repodir" branch -m "$BRANCH_ORG" "$BRANCH_GEN"
@@ -356,8 +365,7 @@ function gmux_rsync()
         # TODO: add support for merge tactics: rebase, merge, cherry-pick
         # TODO: what to do if merge conflict occurs??
         # TODO: add support for submodules
-        CHANGES="$(git -C "$repodir" status --porcelain --untracked-files=all)"
-        if [ -z "$CHANGES" ]; then
+        if working_tree_clean "$repodir"; then
             git -C "$repodir" checkout -q "${pgnunits["branch"]}"
             git -C "$repodir" pull -q origin "${pgnunits["branch"]}"
             git -C "$repodir" checkout -q "$BRANCH_ORG"

@@ -6,6 +6,7 @@ COMMAND=
 TASKDIR=
 PRJNAME=
 TASKNAME=
+REPO_STORE=     # where to store repos (should be inside taskdir)
 ISDEBUG=false
 
 # TODO: add option for config path on CLI
@@ -239,9 +240,6 @@ function _gmux_check_args()
     elif [ -z "$TASKNAME" ]; then
         elog "no task ID is passed"
         exit 1
-    elif [ -z "$PGNDIRBASE" ]; then
-        elog "no plugin directory is passed"
-        exit 1
     elif [ -z "$TASKDIR" ]; then
         elog "no task directory is passed"
         exit 1
@@ -271,7 +269,7 @@ function gmux_delete()
             [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
             #dlog "-- pgnunits: $key -> $val"
         done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
-        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$PGNDIRBASE"
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
         local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
 
         if working_tree_clean "$repodir"; then
@@ -326,7 +324,7 @@ function gmux_merge()
             [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
             #dlog "-- pgnunits: $key -> $val"
         done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
-        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$PGNDIRBASE"
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
 
         BRANCH_GEN=$(generate_branch)
         local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
@@ -369,7 +367,7 @@ function gmux_sync()
             [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
             #dlog "-- pgnunits: $key -> $val"
         done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
-        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$PGNDIRBASE"
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
 
         BRANCH_GEN=$(generate_branch)
         local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
@@ -518,6 +516,10 @@ done
 
 # TODO: add default command (maybe)
 COMMAND="$1"; shift
+
+# TODO: move it to a function
+# Setup some stuff
+REPO_STORE="$TASKDIR/.pgn/gun"
 
 _gmux_check_args
 _gmux_init

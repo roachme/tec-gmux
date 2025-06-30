@@ -57,6 +57,7 @@ function branch_create_or_rename()
         git -C "$repodir" branch -m "$branch_org" "$branch_gen"
     elif [ -z "$branch_org" ]; then
         dlog "'$repodir': create task branch"
+        git -C "$repodir" checkout -b "$branch_def"
         git -C "$repodir" checkout -q -b "$branch_gen" "$branch_def"
     elif ! git -C "$repodir" branch -l | grep -q "$branch_gen"; then
         dlog "'$repodir': task branch: something i've no clue: $repodir"
@@ -87,6 +88,10 @@ function branch_merge()
     local branch_org="$2"
     local branch_gen="$3"
     local branch_def="$4"
+
+    # HOTFIX: when repo cloned first, non-default branches are accessable
+    # only for remote. We switch to base branch first to make it avialable locally
+    git -C "$repodir" checkout -q "$branch_def"
 
     git -C "$repodir" checkout -q "$branch_gen"
     if ! git -C "$repodir" rebase "$branch_def" > /dev/null 2>&1; then

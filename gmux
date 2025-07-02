@@ -63,7 +63,9 @@ function branch_create_or_rename()
 
         # HOTFIX: in case of fresh repo clone, update default branch cuz we
         # hadn't check it out yet.
-        git -C "$repodir" checkout -q -b "$branch_def"
+        if ! git -C "$repodir" show-ref --quiet --verify refs/heads/"$branch_def"; then
+            git -C "$repodir" checkout -q -b "$branch_def"
+        fi
         git -C "$repodir" branch -q --set-upstream-to=origin/"$branch_def"
         git -C "$repodir" pull -q origin "$branch_def"
 

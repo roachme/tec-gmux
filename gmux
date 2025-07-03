@@ -354,6 +354,12 @@ function gmux_merge()
     done <<< "$REPOS"
 }
 
+
+function gmux_revert()
+{
+    echo "under development: revert merge into default branhc"
+}
+
 function gmux_push()
 {
     echo "under development: update remote repo with task branch"
@@ -552,6 +558,8 @@ elif [ "$COMMAND" = "help" ]; then
     gmux_help "$@"
 elif [ "$COMMAND" = "merge" ]; then
     gmux_merge "$@"
+elif [ "$COMMAND" = "revert" ]; then
+    gmux_revert "$@"
 elif [ "$COMMAND" = "push" ]; then
     gmux_push "$@"
 elif [ "$COMMAND" = "show" ]; then

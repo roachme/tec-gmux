@@ -5,6 +5,7 @@ VERSION="v0.0.1"
 COMMAND=
 TASKDIR=
 PRJNAME=
+BRDNAME=
 TASKNAME=
 REPO_STORE=     # where to store repos (should be inside taskdir)
 ISDEBUG=false
@@ -236,7 +237,7 @@ function generate_branch()
 
 function _gmux_init()
 {
-    local unitdir="$TASKDIR/$PRJNAME/$TASKNAME/.tman/pgn"
+    local unitdir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tman/pgn"
 
     find_config
     [ -f "$CONFIG_FILE" ] && jq empty "$CONFIG_FILE" || exit 1
@@ -252,6 +253,9 @@ function _gmux_check_args()
     # TODO: check board name when support is added
     if [ -z "$PRJNAME" ]; then
         elog "no project name is passed"
+        exit 1
+    elif [ -z "$BRDNAME" ]; then
+        elog "no board is passed"
         exit 1
     elif [ -z "$TASKNAME" ]; then
         elog "no task ID is passed"
@@ -270,8 +274,8 @@ function gmux_commit()
 
 function gmux_delete()
 {
-    REPODIR="$TASKDIR/$PRJNAME/$TASKNAME"
-    SYSFILE="$REPODIR/.tman/unit"
+    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tman/units"
     PGNFILE="$REPODIR/.tman/pgn/gun"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     BRANCH_GEN=$(generate_branch)
@@ -286,7 +290,7 @@ function gmux_delete()
             #dlog "-- pgnunits: $key -> $val"
         done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
         [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
-        local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
+        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
 
         if working_tree_clean "$repodir"; then
             git -C "$repodir" checkout -q "${pgnunits["branch"]}"
@@ -319,8 +323,8 @@ function gmux_help()
 function gmux_merge()
 {
     MERGEMODE="$1"
-    REPODIR="$TASKDIR/$PRJNAME/$TASKNAME"
-    SYSFILE="$REPODIR/.tman/unit"
+    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tman/units"
     PGNFILE="$REPODIR/.tman/pgn/gun"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
@@ -343,7 +347,7 @@ function gmux_merge()
         [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
 
         BRANCH_GEN=$(generate_branch)
-        local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
+        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
 
         if working_tree_clean "$repodir"; then
             branch_merge_for_merge "$repodir" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}" "$MERGEMODE"
@@ -367,7 +371,7 @@ function gmux_push()
 
 function gmux_show()
 {
-    local funit="$TASKDIR/$PRJNAME/$TASKNAME/.tman/pgn/gun"
+    local funit="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tman/pgn/gun"
 
     if [ ! -f "$funit" ]; then
         elog "'$TASKNAME': unit file not found"
@@ -379,8 +383,8 @@ function gmux_show()
 # TODO: have an error if branch is in unit file but not created in repo
 function gmux_sync()
 {
-    REPODIR="$TASKDIR/$PRJNAME/$TASKNAME"
-    SYSFILE="$REPODIR/.tman/unit"
+    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tman/units"
     PGNFILE="$REPODIR/.tman/pgn/gun"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
 
@@ -398,7 +402,7 @@ function gmux_sync()
         [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
 
         BRANCH_GEN=$(generate_branch)
-        local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
+        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
 
         dlog "BRANCH_ORG: $BRANCH_ORG"
         dlog "BRANCH_GEN: $BRANCH_GEN"
@@ -456,8 +460,8 @@ function gmux_sync()
 
 function gmux_rsync()
 {
-    REPODIR="$TASKDIR/$PRJNAME/$TASKNAME"
-    SYSFILE="$REPODIR/.tman/unit"
+    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tman/units"
     PGNFILE="$REPODIR/.tman/pgn/gun"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     BRANCH_GEN=$(generate_branch)
@@ -471,7 +475,7 @@ function gmux_rsync()
             [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
             #dlog "-- pgnunits: $key -> $val"
         done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
-        local repodir="$TASKDIR/$PRJNAME/$TASKNAME/${pgnunits["name"]}"
+        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
 
         # TODO: add support for merge tactics: rebase, merge, cherry-pick
         # TODO: what to do if merge conflict occurs??
@@ -497,7 +501,7 @@ function gmux_rsync()
 
 
 # Driver part of the code
-OPTS=$(getopt -o di:p:P:T:hV --long debug,prj:,taskid:,pgndir:,taskdir:help,version -n "$PGNAME" -- "$@")
+OPTS=$(getopt -o b:di:p:P:T:hV --long board:,debug,prj:,taskid:,pgndir:,taskdir:help,version -n "$PGNAME" -- "$@")
 if [ $? -ne 0 ]; then
     #echo "error parsing options" >&2
     exit 1
@@ -508,6 +512,10 @@ eval set -- "$OPTS"
 
 while true; do
     case "$1" in
+        -b)
+            BRDNAME="$2"
+            shift 2
+            ;;
         -d)
             ISDEBUG=true
             shift 1
@@ -551,6 +559,7 @@ REPO_STORE="$TASKDIR/.pgn/gun"
 
 _gmux_check_args
 _gmux_init
+
 
 
 if [ -z "$COMMAND" ]; then

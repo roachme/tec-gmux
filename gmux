@@ -367,7 +367,13 @@ function gmux_push()
 
 function gmux_show()
 {
-    cat "$TASKDIR/$PRJNAME/$TASKNAME/.tman/pgn/gun"
+    local funit="$TASKDIR/$PRJNAME/$TASKNAME/.tman/pgn/gun"
+
+    if [ ! -f "$funit" ]; then
+        elog "'$TASKNAME': unit file not found"
+        exit 1
+    fi
+    cat "$funit"
 }
 
 # TODO: have an error if branch is in unit file but not created in repo

@@ -276,7 +276,7 @@ function gmux_delete()
 {
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tman/units"
-    PGNFILE="$REPODIR/.tman/pgn/gun"
+    PGNFILE="$REPODIR/.tman/pgn/gmux"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     BRANCH_GEN=$(generate_branch)
     BRANCH_ORG="$(cat "$PGNFILE" | grep branch | tr -s ' ' | cut -f 3 -d ' ')"
@@ -325,7 +325,7 @@ function gmux_merge()
     MERGEMODE="$1"
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tman/units"
-    PGNFILE="$REPODIR/.tman/pgn/gun"
+    PGNFILE="$REPODIR/.tman/pgn/gmux"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
     #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
@@ -371,7 +371,7 @@ function gmux_push()
 
 function gmux_show()
 {
-    local funit="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tman/pgn/gun"
+    local funit="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tman/pgn/gmux"
 
     if [ ! -f "$funit" ]; then
         elog "'$TASKNAME': unit file not found"
@@ -385,7 +385,7 @@ function gmux_sync()
 {
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tman/units"
-    PGNFILE="$REPODIR/.tman/pgn/gun"
+    PGNFILE="$REPODIR/.tman/pgn/gmux"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
 
     # roach:FIXME: will break a program when I add repo list in there
@@ -442,7 +442,7 @@ function gmux_sync()
             done
 
             # Update branch in gmux unit file
-            unit_set "$REPODIR/.tman/pgn/gun" "branch" "$BRANCH_GEN"
+            unit_set "$REPODIR/.tman/pgn/gmux" "branch" "$BRANCH_GEN"
         else
             elog "'${pgnunits["name"]}': repo has uncommited changes"
             continue
@@ -462,7 +462,7 @@ function gmux_rsync()
 {
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tman/units"
-    PGNFILE="$REPODIR/.tman/pgn/gun"
+    PGNFILE="$REPODIR/.tman/pgn/gmux"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     BRANCH_GEN=$(generate_branch)
     [ -f "$PGNFILE" ] && IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
@@ -555,7 +555,7 @@ COMMAND="$1"; shift
 
 # TODO: move it to a function
 # Setup some stuff
-REPO_STORE="$TASKDIR/.pgn/gun"
+REPO_STORE="$TASKDIR/.pgn/gmux"
 
 _gmux_check_args
 _gmux_init

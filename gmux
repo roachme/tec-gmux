@@ -18,6 +18,10 @@ BRANCHPATT="TYPE/PREFIX-ID_DESC_DATE"
 
 declare -A PGNUNITS
 
+function die() {
+	echo "$PGNAME:" "$@" >&2
+	exit 1
+}
 
 function find_config()
 {
@@ -248,22 +252,38 @@ function _gmux_init()
     fi
 }
 
+function check_arg_prj()
+{
+    if [ -z "$PRJNAME" ]; then
+        die "no project name is passed"
+    elif [ ! -d "$TASKDIR/$PRJNAME" ]; then
+        die "'$PRJNAME': no such project name"
+    fi
+}
+
+function check_arg_brd()
+{
+    if [ -z "$BRDNAME" ]; then
+        die "no board name is passed"
+    elif [ ! -d "$TASKDIR/$PRJNAME/$BRDNAME" ]; then
+        die "'$BRDNAME': no such board name"
+    fi
+}
+
+function check_arg_task()
+{
+    if [ -z "$TASKNAME" ]; then
+        die "no task ID is passed"
+    elif [ ! -d "$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME" ]; then
+        die "'$TASKNAME': no such task ID"
+    fi
+}
+
 function _gmux_check_args()
 {
-    # TODO: check board name when support is added
-    if [ -z "$PRJNAME" ]; then
-        elog "no project name is passed"
-        exit 1
-    elif [ -z "$BRDNAME" ]; then
-        elog "no board is passed"
-        exit 1
-    elif [ -z "$TASKNAME" ]; then
-        elog "no task ID is passed"
-        exit 1
-    elif [ -z "$TASKDIR" ]; then
-        elog "no task directory is passed"
-        exit 1
-    fi
+    check_arg_prj
+    check_arg_brd
+    check_arg_task
 }
 
 

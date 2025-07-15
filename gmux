@@ -386,7 +386,33 @@ function gmux_revert()
 
 function gmux_push()
 {
-    echo "under development: update remote repo with task branch"
+    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tman/units"
+    PGNFILE="$REPODIR/.tman/pgn/gmux"
+    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
+    #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
+
+        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
+
+        if working_tree_clean "$repodir"; then
+            git -C "$repodir" submodule foreach --quiet 'echo $path' | while read -r reponame; do
+                echo "$reponame"
+                # push to remote repo
+            done
+        fi
+    done <<< "$REPOS"
+    echo "under development"
 }
 
 function gmux_show()

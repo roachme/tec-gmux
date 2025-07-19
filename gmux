@@ -26,8 +26,8 @@ function die() {
 function find_config()
 {
     declare -a cfgs=(
-        "$HOME/.tman/pgns/gmux.json"
-        "$HOME/.config/tman/pgns/gmux.json"
+        "$HOME/.tman/pgn/gmux.json"
+        "$HOME/.config/tman/pgn/gmux.json"
     )
 
     for cfg in "${cfgs[@]}"; do

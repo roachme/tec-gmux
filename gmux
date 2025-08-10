@@ -432,8 +432,13 @@ function gmux_sync()
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tman/units"
     PGNFILE="$REPODIR/.tman/pgn/gmux"
-    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
 
+    # TODO: Apply this check guard to all commands
+    if [ "$(jq -c ".$PRJNAME" "$CONFIG_FILE")" = "null" ]; then
+        return 0
+    fi
+
+    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     # roach:FIXME: will break a program when I add repo list in there
     [ -f "$PGNFILE" ] && IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
 

@@ -26,8 +26,8 @@ function die() {
 function find_config()
 {
     declare -a cfgs=(
-        "$HOME/.tman/pgn/gmux.json"
-        "$HOME/.config/tman/pgn/gmux.json"
+        "$HOME/.tec/pgn/gmux.json"
+        "$HOME/.config/tec/pgn/gmux.json"
     )
 
     for cfg in "${cfgs[@]}"; do
@@ -241,7 +241,7 @@ function generate_branch()
 
 function _gmux_init()
 {
-    local unitdir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tman/pgn"
+    local unitdir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tec/pgn"
 
     find_config
     [ -f "$CONFIG_FILE" ] && jq empty "$CONFIG_FILE" || exit 1
@@ -295,8 +295,8 @@ function gmux_commit()
 function gmux_delete()
 {
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
-    SYSFILE="$REPODIR/.tman/units"
-    PGNFILE="$REPODIR/.tman/pgn/gmux"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     BRANCH_GEN=$(generate_branch)
     BRANCH_ORG="$(cat "$PGNFILE" | grep branch | tr -s ' ' | cut -f 3 -d ' ')"
@@ -344,8 +344,8 @@ function gmux_merge()
 {
     MERGEMODE="$1"
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
-    SYSFILE="$REPODIR/.tman/units"
-    PGNFILE="$REPODIR/.tman/pgn/gmux"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
     #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
@@ -387,8 +387,8 @@ function gmux_revert()
 function gmux_push()
 {
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
-    SYSFILE="$REPODIR/.tman/units"
-    PGNFILE="$REPODIR/.tman/pgn/gmux"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
     #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
@@ -417,7 +417,7 @@ function gmux_push()
 
 function gmux_show()
 {
-    local funit="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tman/pgn/gmux"
+    local funit="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tec/pgn/gmux"
 
     if [ ! -f "$funit" ]; then
         elog "'$TASKNAME': unit file not found"
@@ -430,8 +430,8 @@ function gmux_show()
 function gmux_sync()
 {
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
-    SYSFILE="$REPODIR/.tman/units"
-    PGNFILE="$REPODIR/.tman/pgn/gmux"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
 
     # TODO: Apply this check guard to all commands
     if [ "$(jq -c ".$PRJNAME" "$CONFIG_FILE")" = "null" ]; then
@@ -493,7 +493,7 @@ function gmux_sync()
             done
 
             # Update branch in gmux unit file
-            unit_set "$REPODIR/.tman/pgn/gmux" "branch" "$BRANCH_GEN"
+            unit_set "$REPODIR/.tec/pgn/gmux" "branch" "$BRANCH_GEN"
         else
             elog "'${pgnunits["name"]}': repo has uncommited changes"
             continue
@@ -512,8 +512,8 @@ function gmux_sync()
 function gmux_rsync()
 {
     REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
-    SYSFILE="$REPODIR/.tman/units"
-    PGNFILE="$REPODIR/.tman/pgn/gmux"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
     REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
     BRANCH_GEN=$(generate_branch)
     [ -f "$PGNFILE" ] && IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"

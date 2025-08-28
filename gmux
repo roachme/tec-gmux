@@ -261,8 +261,20 @@ function check_arg_prj()
     fi
 }
 
-function check_arg_brd()
+function get_and_check_board()
 {
+    local curr=
+    local fname="$TASKDIR/$PRJNAME/.tec/toggles"
+
+    if [ -f "$fname" ]; then
+        curr="$(grep curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
+    fi
+
+    if [ -z "$BRDNAME" ]; then
+        BRDNAME="$curr"
+    fi
+
+    # check project name
     if [ -z "$BRDNAME" ]; then
         die "no board name is passed"
     elif [ ! -d "$TASKDIR/$PRJNAME/$BRDNAME" ]; then
@@ -270,8 +282,20 @@ function check_arg_brd()
     fi
 }
 
-function check_arg_task()
+function get_and_check_task()
 {
+    local curr=
+    local fname="$TASKDIR/$PRJNAME/$BRDNAME/.tec/toggles"
+
+    if [ -f "$fname" ]; then
+        curr="$(grep curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
+    fi
+
+    if [ -z "$TASKNAME" ]; then
+        TASKNAME="$curr"
+    fi
+
+    # check project name
     if [ -z "$TASKNAME" ]; then
         die "no task ID is passed"
     elif [ ! -d "$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME" ]; then
@@ -279,11 +303,32 @@ function check_arg_task()
     fi
 }
 
+function get_and_check_project()
+{
+    local curr=
+    local fname="$TASKDIR/.tec/toggles"
+
+    if [ -f "$fname" ]; then
+        curr="$(grep curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
+    fi
+
+    if [ -z "$PRJNAME" ]; then
+        PRJNAME="$curr"
+    fi
+
+    # check project name
+    if [ -z "$PRJNAME" ]; then
+        die "no project name is passed"
+    elif [ ! -d "$TASKDIR/$PRJNAME" ]; then
+        die "'$PRJNAME': no such project name"
+    fi
+}
+
 function _gmux_check_args()
 {
-    check_arg_prj
-    check_arg_brd
-    check_arg_task
+    get_and_check_project
+    get_and_check_board
+    get_and_check_task
 }
 
 

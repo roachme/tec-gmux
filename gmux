@@ -267,7 +267,7 @@ function get_and_check_board()
     local fname="$TASKDIR/$PRJNAME/.tec/toggles"
 
     if [ -f "$fname" ]; then
-        curr="$(grep curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
+        curr="$(grep -i curr "$fname" | cut -f 2 -d '=' | tr -d ' ')"
     fi
 
     if [ -z "$BRDNAME" ]; then
@@ -288,7 +288,7 @@ function get_and_check_task()
     local fname="$TASKDIR/$PRJNAME/$BRDNAME/.tec/toggles"
 
     if [ -f "$fname" ]; then
-        curr="$(grep curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
+        curr="$(grep -i curr "$fname" | cut -f 2 -d '=' | tr -d ' ')"
     fi
 
     if [ -z "$TASKNAME" ]; then
@@ -309,7 +309,7 @@ function get_and_check_project()
     local fname="$TASKDIR/.tec/toggles"
 
     if [ -f "$fname" ]; then
-        curr="$(grep curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
+        curr="$(grep -i curr "$fname" | cut -f 2 -d '=' | tr -d ' ')"
     fi
 
     if [ -z "$PRJNAME" ]; then
@@ -647,7 +647,7 @@ while true; do
 done
 
 # TODO: add default command (maybe)
-COMMAND="$1"; shift
+COMMAND="$2"; shift
 
 # TODO: move it to a function
 # Setup some stuff
@@ -658,28 +658,36 @@ _gmux_init
 
 
 
-if [ -z "$COMMAND" ]; then
-    elog "no command passed"
-    exit 1
-elif [ "$COMMAND" = "commit" ]; then
-    gmux_commit "$@"
-elif [ "$COMMAND" = "delete" ]; then
-    gmux_delete "$@"
-elif [ "$COMMAND" = "help" ]; then
-    gmux_help "$@"
-elif [ "$COMMAND" = "merge" ]; then
-    gmux_merge "$@"
-elif [ "$COMMAND" = "revert" ]; then
-    gmux_revert "$@"
-elif [ "$COMMAND" = "push" ]; then
-    gmux_push "$@"
-elif [ "$COMMAND" = "show" ]; then
-    gmux_show "$@"
-elif [ "$COMMAND" = "sync" ]; then
-    gmux_sync "$@"
-elif [ "$COMMAND" = "rsync" ]; then
-    gmux_rsync "$@"
-else
-    elog "'$COMMAND': no such command"
-    exit 1
-fi
+case "$COMMAND" in
+    "commit")       gmux_commit "$@" ;;
+    "delete")       gmux_delete "$@" ;;
+    "show")         gmux_show "$@" ;;
+    "sync")         gmux_sync "$@" ;;
+    *)              echo "no such command '$COMMAND'"
+esac
+
+#if [ -z "$COMMAND" ]; then
+#    elog "no command passed"
+#    exit 1
+#elif [ "$COMMAND" = "commit" ]; then
+#    gmux_commit "$@"
+#elif [ "$COMMAND" = "delete" ]; then
+#    gmux_delete "$@"
+#elif [ "$COMMAND" = "help" ]; then
+#    gmux_help "$@"
+#elif [ "$COMMAND" = "merge" ]; then
+#    gmux_merge "$@"
+#elif [ "$COMMAND" = "revert" ]; then
+#    gmux_revert "$@"
+#elif [ "$COMMAND" = "push" ]; then
+#    gmux_push "$@"
+#elif [ "$COMMAND" = "show" ]; then
+#    gmux_show "$@"
+#elif [ "$COMMAND" = "sync" ]; then
+#    gmux_sync "$@"
+#elif [ "$COMMAND" = "rsync" ]; then
+#    gmux_rsync "$@"
+#else
+#    elog "'$COMMAND': no such command"
+#    exit 1
+#fi

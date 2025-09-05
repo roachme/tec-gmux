@@ -2,7 +2,6 @@
 
 PGNAME="tman-gmux"
 VERSION="v0.0.1"
-COMMAND=
 TASKDIR=
 PRJNAME=
 BRDNAME=
@@ -646,48 +645,30 @@ while true; do
     esac
 done
 
-# TODO: add default command (maybe)
-COMMAND="$2"; shift
+gmux() {
+    local command=
 
-# TODO: move it to a function
-# Setup some stuff
-REPO_STORE="$TASKDIR/.pgn/gmux"
+    [ $# -eq 0 ] && set -- "show" # set default command
+    command="$1"; shift
 
-_gmux_check_args
-_gmux_init
+    # TODO: move it to a function
+    # Setup some stuff
+    REPO_STORE="$TASKDIR/.pgn/gmux"
 
+    _gmux_check_args
+    _gmux_init
 
+    case "$command" in
+        "commit")       shift; gmux_commit "$@" ;;
+        "delete")       shift; gmux_delete "$@" ;;
+        "help")         shift; gmux_help "$@" ;;
+        "merge")        shift; gmux_merge "$@" ;;
+        "revert")       shift; gmux_revert "$@" ;;
+        "show")         shift; gmux_show "$@" ;;
+        "sync")         shift; gmux_sync "$@" ;;
+        "rsync")        shift; gmux_rsync "$@" ;;
+        *)              die "'$command': no such command"
+    esac
+}
 
-case "$COMMAND" in
-    "commit")       gmux_commit "$@" ;;
-    "delete")       gmux_delete "$@" ;;
-    "show")         gmux_show "$@" ;;
-    "sync")         gmux_sync "$@" ;;
-    *)              echo "no such command '$COMMAND'"
-esac
-
-#if [ -z "$COMMAND" ]; then
-#    elog "no command passed"
-#    exit 1
-#elif [ "$COMMAND" = "commit" ]; then
-#    gmux_commit "$@"
-#elif [ "$COMMAND" = "delete" ]; then
-#    gmux_delete "$@"
-#elif [ "$COMMAND" = "help" ]; then
-#    gmux_help "$@"
-#elif [ "$COMMAND" = "merge" ]; then
-#    gmux_merge "$@"
-#elif [ "$COMMAND" = "revert" ]; then
-#    gmux_revert "$@"
-#elif [ "$COMMAND" = "push" ]; then
-#    gmux_push "$@"
-#elif [ "$COMMAND" = "show" ]; then
-#    gmux_show "$@"
-#elif [ "$COMMAND" = "sync" ]; then
-#    gmux_sync "$@"
-#elif [ "$COMMAND" = "rsync" ]; then
-#    gmux_rsync "$@"
-#else
-#    elog "'$COMMAND': no such command"
-#    exit 1
-#fi
+gmux "$@"

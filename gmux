@@ -231,6 +231,12 @@ function generate_branch()
     IFS='-/_' read -ra items <<< "$branchpatt"
     for item in "${items[@]}"; do
         lower_item="${item,,}" # to lower case
+
+        # HOTFIX: Set default values
+        if [ -z "${units["$lower_item"]}" ]; then
+            units["$lower_item"]="task"
+        fi
+
         branchpatt="${branchpatt/$item/${units["$lower_item"]}}"
     done
 

@@ -272,7 +272,7 @@ function get_and_check_board()
     local fname="$TASKDIR/$PRJNAME/.tec/toggles"
 
     if [ -f "$fname" ]; then
-        curr="$(grep -i curr "$fname" | cut -f 2 -d '=' | tr -d ' ')"
+        curr="$(grep -i curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
     fi
 
     if [ -z "$BRDNAME" ]; then
@@ -293,7 +293,7 @@ function get_and_check_task()
     local fname="$TASKDIR/$PRJNAME/$BRDNAME/.tec/toggles"
 
     if [ -f "$fname" ]; then
-        curr="$(grep -i curr "$fname" | cut -f 2 -d '=' | tr -d ' ')"
+        curr="$(grep -i curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
     fi
 
     if [ -z "$TASKNAME" ]; then
@@ -314,7 +314,7 @@ function get_and_check_project()
     local fname="$TASKDIR/.tec/toggles"
 
     if [ -f "$fname" ]; then
-        curr="$(grep -i curr "$fname" | cut -f 2 -d '=' | tr -d ' ')"
+        curr="$(grep -i curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
     fi
 
     if [ -z "$PRJNAME" ]; then

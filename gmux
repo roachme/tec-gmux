@@ -389,6 +389,12 @@ function gmux_help()
     usage
 }
 
+# TODO: Add init function
+function gmux_init()
+{
+    return 0;
+}
+
 # TODO: add merge strategies: merge, rebase, cherry-pick
 function gmux_merge()
 {
@@ -668,6 +674,7 @@ gmux() {
         "commit")       shift; gmux_commit "$@" ;;
         "delete")       shift; gmux_delete "$@" ;;
         "help")         shift; gmux_help "$@" ;;
+        "init")         shift; gmux_init "$@" ;;
         "merge")        shift; gmux_merge "$@" ;;
         "revert")       shift; gmux_revert "$@" ;;
         "show")         shift; gmux_show "$@" ;;

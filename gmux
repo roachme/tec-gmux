@@ -3,8 +3,8 @@
 PGNAME="tman-gmux"
 VERSION="v0.0.1"
 TASKDIR=
-PRJNAME=
-BRDNAME=
+ENVNAME=
+DESKNAME=
 TASKNAME=
 REPO_STORE=     # where to store repos (should be inside taskdir)
 ISDEBUG=false
@@ -205,10 +205,10 @@ EOF
 }
 
 # TODO: Add support for config values from gmux.json
-# FIXME: add prefix and other project wide stuff
+# FIXME: add prefix and other environment wide stuff
 function generate_branch()
 {
-    #local prjcfg="$1"
+    #local envcfg="$1"
     declare -A units  # Declare associative array
     declare -A pgnunits  # Declare associative array
     local branchpatt="$BRANCHPATT"
@@ -225,7 +225,7 @@ function generate_branch()
 
     # TODO: set default values
     units["id"]="$TASKNAME"
-    units["prefix"]="$(jq -cr ".$PRJNAME.prefix" "$CONFIG_FILE")"
+    units["prefix"]="$(jq -cr ".$ENVNAME.prefix" "$CONFIG_FILE")"
     [[ ${units["prefix"]} = "null" ]] && units["prefix"]="PREFIX"
 
     IFS='-/_' read -ra items <<< "$branchpatt"
@@ -246,7 +246,7 @@ function generate_branch()
 
 function _gmux_init()
 {
-    local unitdir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tec/pgn"
+    local unitdir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/.tec/pgn"
 
     find_config
     [ -f "$CONFIG_FILE" ] && jq empty "$CONFIG_FILE" || exit 1
@@ -257,40 +257,40 @@ function _gmux_init()
     fi
 }
 
-function check_arg_prj()
+function check_arg_env()
 {
-    if [ -z "$PRJNAME" ]; then
-        die "no project name is passed"
-    elif [ ! -d "$TASKDIR/$PRJNAME" ]; then
-        die "'$PRJNAME': no such project name"
+    if [ -z "$ENVNAME" ]; then
+        die "no environment name is passed"
+    elif [ ! -d "$TASKDIR/$ENVNAME" ]; then
+        die "'$ENVNAME': no such environment name"
     fi
 }
 
-function get_and_check_board()
+function get_and_check_desk()
 {
     local curr=
-    local fname="$TASKDIR/$PRJNAME/.tec/toggles"
+    local fname="$TASKDIR/$ENVNAME/.tec/toggles"
 
     if [ -f "$fname" ]; then
         curr="$(grep -i curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
     fi
 
-    if [ -z "$BRDNAME" ]; then
-        BRDNAME="$curr"
+    if [ -z "$DESKNAME" ]; then
+        DESKNAME="$curr"
     fi
 
-    # check project name
-    if [ -z "$BRDNAME" ]; then
-        die "no board name is passed"
-    elif [ ! -d "$TASKDIR/$PRJNAME/$BRDNAME" ]; then
-        die "'$BRDNAME': no such board name"
+    # check environment name
+    if [ -z "$DESKNAME" ]; then
+        die "no desk name is passed"
+    elif [ ! -d "$TASKDIR/$ENVNAME/$DESKNAME" ]; then
+        die "'$DESKNAME': no such desk name"
     fi
 }
 
 function get_and_check_task()
 {
     local curr=
-    local fname="$TASKDIR/$PRJNAME/$BRDNAME/.tec/toggles"
+    local fname="$TASKDIR/$ENVNAME/$DESKNAME/.tec/toggles"
 
     if [ -f "$fname" ]; then
         curr="$(grep -i curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
@@ -300,15 +300,15 @@ function get_and_check_task()
         TASKNAME="$curr"
     fi
 
-    # check project name
+    # check environment name
     if [ -z "$TASKNAME" ]; then
         die "no task ID is passed"
-    elif [ ! -d "$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME" ]; then
+    elif [ ! -d "$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME" ]; then
         die "'$TASKNAME': no such task ID"
     fi
 }
 
-function get_and_check_project()
+function get_and_check_environment()
 {
     local curr=
     local fname="$TASKDIR/.tec/toggles"
@@ -317,22 +317,23 @@ function get_and_check_project()
         curr="$(grep -i curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
     fi
 
-    if [ -z "$PRJNAME" ]; then
-        PRJNAME="$curr"
+
+    if [ -z "$ENVNAME" ]; then
+        ENVNAME="$curr"
     fi
 
-    # check project name
-    if [ -z "$PRJNAME" ]; then
-        die "no project name is passed"
-    elif [ ! -d "$TASKDIR/$PRJNAME" ]; then
-        die "'$PRJNAME': no such project name"
+    # check environment name
+    if [ -z "$ENVNAME" ]; then
+        die "no environment name is passed"
+    elif [ ! -d "$TASKDIR/$ENVNAME" ]; then
+        die "'$ENVNAME': no such environment name"
     fi
 }
 
 function _gmux_check_args()
 {
-    get_and_check_project
-    get_and_check_board
+    get_and_check_environment
+    get_and_check_desk
     get_and_check_task
 }
 
@@ -344,10 +345,10 @@ function gmux_commit()
 
 function gmux_delete()
 {
-    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tec/units"
     PGNFILE="$REPODIR/.tec/pgn/gmux"
-    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
     BRANCH_GEN=$(generate_branch)
     BRANCH_ORG="$(cat "$PGNFILE" | grep branch | tr -s ' ' | cut -f 3 -d ' ')"
 
@@ -360,7 +361,7 @@ function gmux_delete()
             #dlog "-- pgnunits: $key -> $val"
         done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
         [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
-        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
 
         if working_tree_clean "$repodir"; then
             git -C "$repodir" checkout -q "${pgnunits["branch"]}"
@@ -399,10 +400,10 @@ function gmux_init()
 function gmux_merge()
 {
     MERGEMODE="$1"
-    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tec/units"
     PGNFILE="$REPODIR/.tec/pgn/gmux"
-    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
     IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
     #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
 
@@ -423,7 +424,7 @@ function gmux_merge()
         [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
 
         BRANCH_GEN=$(generate_branch)
-        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
 
         if working_tree_clean "$repodir"; then
             branch_merge_for_merge "$repodir" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}" "$MERGEMODE"
@@ -442,10 +443,10 @@ function gmux_revert()
 
 function gmux_push()
 {
-    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tec/units"
     PGNFILE="$REPODIR/.tec/pgn/gmux"
-    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
     IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
     #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
 
@@ -459,7 +460,7 @@ function gmux_push()
         done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
         [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
 
-        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
 
         if working_tree_clean "$repodir"; then
             git -C "$repodir" submodule foreach --quiet 'echo $path' | while read -r reponame; do
@@ -473,7 +474,7 @@ function gmux_push()
 
 function gmux_show()
 {
-    local funit="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/.tec/pgn/gmux"
+    local funit="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/.tec/pgn/gmux"
 
     if [ ! -f "$funit" ]; then
         elog "'$TASKNAME': unit file not found"
@@ -485,16 +486,16 @@ function gmux_show()
 # TODO: have an error if branch is in unit file but not created in repo
 function gmux_sync()
 {
-    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tec/units"
     PGNFILE="$REPODIR/.tec/pgn/gmux"
 
     # TODO: Apply this check guard to all commands
-    if [ "$(jq -c ".$PRJNAME" "$CONFIG_FILE")" = "null" ]; then
+    if [ "$(jq -c ".$ENVNAME" "$CONFIG_FILE")" = "null" ]; then
         return 0
     fi
 
-    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
     # roach:FIXME: will break a program when I add repo list in there
     [ -f "$PGNFILE" ] && IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
 
@@ -509,7 +510,7 @@ function gmux_sync()
         [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
 
         BRANCH_GEN=$(generate_branch)
-        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
 
         dlog "BRANCH_ORG: $BRANCH_ORG"
         dlog "BRANCH_GEN: $BRANCH_GEN"
@@ -567,10 +568,10 @@ function gmux_sync()
 
 function gmux_rsync()
 {
-    REPODIR="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME"
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
     SYSFILE="$REPODIR/.tec/units"
     PGNFILE="$REPODIR/.tec/pgn/gmux"
-    REPOS="$(jq -c ".$PRJNAME.repos[]" "$CONFIG_FILE")"
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
     BRANCH_GEN=$(generate_branch)
     [ -f "$PGNFILE" ] && IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
 
@@ -582,7 +583,7 @@ function gmux_rsync()
             [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
             #dlog "-- pgnunits: $key -> $val"
         done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
-        local repodir="$TASKDIR/$PRJNAME/$BRDNAME/$TASKNAME/${pgnunits["name"]}"
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
 
         # TODO: add support for merge tactics: rebase, merge, cherry-pick
         # TODO: what to do if merge conflict occurs??
@@ -608,7 +609,7 @@ function gmux_rsync()
 
 
 # Driver part of the code
-OPTS=$(getopt -o b:di:p:P:T:hV --long board:,debug,prj:,taskid:,pgndir:,taskdir:help,version -n "$PGNAME" -- "$@")
+OPTS=$(getopt -o b:e:di:P:T:hV --long desk:,env:,debug,taskid:,pgndir:,taskdir:help,version -n "$PGNAME" -- "$@")
 if [ $? -ne 0 ]; then
     #echo "error parsing options" >&2
     exit 1
@@ -620,7 +621,7 @@ eval set -- "$OPTS"
 while true; do
     case "$1" in
         -b)
-            BRDNAME="$2"
+            DESKNAME="$2"
             shift 2
             ;;
         -d)
@@ -631,8 +632,8 @@ while true; do
             TASKNAME="$2"
             shift 2
             ;;
-        -p)
-            PRJNAME="$2"
+        -e)
+            ENVNAME="$2"
             shift 2
             ;;
         -P)

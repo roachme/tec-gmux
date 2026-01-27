@@ -666,7 +666,7 @@ gmux() {
 
     # TODO: move it to a function
     # Setup some stuff
-    REPO_STORE="$TASKDIR/.pgn/gmux"
+    REPO_STORE="$TASKDIR/.tec/pgn/gmux"
 
     _gmux_check_args
     _gmux_init

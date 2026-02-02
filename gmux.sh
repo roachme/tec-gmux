@@ -1,0 +1,688 @@
+#!/bin/bash
+
+PGNAME="tman-gmux"
+VERSION="v0.0.1"
+TASKDIR=
+ENVNAME=
+DESKNAME=
+TASKNAME=
+REPO_STORE=     # where to store repos (should be inside taskdir)
+ISDEBUG=false
+
+# TODO: add option for config path on CLI
+CONFIG_FILE=
+
+COMMITPATT="[ID] PART: MSG"
+BRANCHPATT="TYPE/PREFIX-ID_DESC_DATE"
+
+declare -A PGNUNITS
+
+function die() {
+	echo "$PGNAME:" "$@" >&2
+	exit 1
+}
+
+function find_config()
+{
+    declare -a cfgs=(
+        "$HOME/.tec/pgn/gmux.json"
+        "$HOME/.config/tec/pgn/gmux.json"
+    )
+
+    for cfg in "${cfgs[@]}"; do
+        if [ -f "$cfg" ]; then
+            CONFIG_FILE="$cfg"
+            break
+        fi
+    done
+}
+
+function working_tree_clean()
+{
+    local repodir="$1"
+    local changes=
+
+    changes="$(git -C "$repodir" status --ignore-submodules --porcelain --untracked-files=all)"
+    if [ -z "$changes" ]; then
+        return 0;
+    fi
+    return 1
+}
+
+function branch_create_or_rename()
+{
+    local repodir="$1"
+    local branch_org="$2"
+    local branch_gen="$3"
+    local branch_def="$4"
+
+    dlog "branch_create_or_rename: start"
+    if [ -n "$branch_org" ] && [ "$branch_org" != "$branch_gen" ]; then
+        dlog "'$repodir': rename task branch"
+        git -C "$repodir" branch -m "$branch_org" "$branch_gen"
+    elif [ -z "$branch_org" ]; then
+        dlog "'$repodir': create task branch"
+        dlog "branch_create_or_rename: branch_def: $branch_def"
+        dlog "branch_create_or_rename: branch_gen: $branch_gen"
+
+        # HOTFIX: in case of fresh repo clone, update default branch cuz we
+        # hadn't check it out yet.
+        if ! git -C "$repodir" show-ref --quiet --verify refs/heads/"$branch_def"; then
+            git -C "$repodir" checkout -q -b "$branch_def"
+        fi
+        git -C "$repodir" branch -q --set-upstream-to=origin/"$branch_def"
+        git -C "$repodir" pull -q origin "$branch_def"
+
+        git -C "$repodir" checkout -q -b "$branch_gen" "$branch_def"
+    elif ! git -C "$repodir" branch -l | grep -q "$branch_gen"; then
+        dlog "'$repodir': task branch: something i've no clue: $repodir"
+        dlog "'$repodir': branch_org: $branch_org"
+        dlog "'$repodir': branch_gen: $branch_gen"
+        dlog "'$repodir': branch_def: $branch_def"
+        git -C "$repodir" checkout -q -b "$branch_gen" "$branch_def"
+    fi
+}
+
+function branch_rsync()
+{
+    local repodir="$1"
+    local branch_org="$2"
+    local branch_gen="$3"
+    local branch_def="$4"
+
+    git -C "$repodir" checkout -q "$branch_def"
+    git -C "$repodir" pull -q origin "$branch_def"
+    git -C "$repodir" checkout -q "$branch_org"
+    git -C "$repodir" rebase -q "$branch_def"
+}
+
+# TODO: refactor it with function below
+function branch_merge()
+{
+    local repodir="$1"
+    local branch_org="$2"
+    local branch_gen="$3"
+    local branch_def="$4"
+
+    # HOTFIX: when repo cloned first, non-default branches are accessable
+    # only for remote. We switch to base branch first to make it avialable locally
+    git -C "$repodir" checkout -q "$branch_def"
+
+    git -C "$repodir" checkout -q "$branch_gen"
+    if ! git -C "$repodir" rebase "$branch_def" > /dev/null 2>&1; then
+        git -C "$repodir" rebase --abort > /dev/null
+        return 1
+    fi
+    return 0
+}
+
+# TODO: refactor it with function above
+# TODO: show error in case merge conflict occurs
+function branch_merge_for_merge()
+{
+    local repodir="$1"
+    local branch_org="$2"
+    local branch_gen="$3"
+    local branch_def="$4"
+    local mergemode="$5"
+
+    git -C "$repodir" checkout -q "$branch_def"
+    if [ "$mergemode" = "-r" ]; then
+        if ! git -C "$repodir" rebase -q "$branch_gen"; then
+            git -C "$repodir" rebase --abort
+            elog "$repodir: failed to rebase against task branch"
+        fi
+    elif [ "$mergemode" = "-m" ]; then
+        if ! git -C "$repodir" merge -q "$branch_gen"; then
+            git -C "$repodir" rebase --abort
+            elog "$repodir: failed to merge against task branch"
+        fi
+    elif [ "$mergemode" = "-c" ]; then
+        elog "under development"
+    fi
+    git -C "$repodir" checkout -q "$branch_def"
+}
+
+function unit_load()
+{
+    local fname="$1"
+
+    # Check if gmux unit file exists to load units
+    [ ! -f "$fname" ] && return 0
+
+    while IFS=" : " read -r key val; do
+        [[ -n "$key" ]] && PGNUNITS["$key"]="$val"  # Skip empty lines
+    done < "$fname"
+}
+
+function unit_save()
+{
+    local fname="$1"
+
+    # Empty the file first
+    : > "$fname"
+
+    for unit in "${!PGNUNITS[@]}"; do
+        echo "$unit : ${PGNUNITS["$unit"]}" >> "$fname"
+    done
+}
+
+function unit_set()
+{
+    local fname="$1"
+    local ukey="$2"
+    local uval="$3"
+
+    unit_load "$fname"
+    PGNUNITS["$ukey"]="$uval"
+    unit_save "$fname"
+}
+
+function elog()
+{
+    echo "$PGNAME:" "$@" >&2
+}
+
+function dlog()
+{
+    if [ "$ISDEBUG" == true ]; then
+        echo "$PGNAME:" "$@"
+    fi
+}
+
+function usage()
+{
+cat << EOF
+Usage: tman gmux [OPTION]...
+    commit      create task commit based on commit pattern
+    delete      delete task branch
+    help        show this help message and exit
+    show        show unit values
+    push        push task branch to remote repo
+    sync        create and update task branch
+    rsync       update from romote branch and merge with default branch
+EOF
+}
+
+# TODO: Add support for config values from gmux.json
+# FIXME: add prefix and other environment wide stuff
+function generate_branch()
+{
+    #local envcfg="$1"
+    declare -A units  # Declare associative array
+    declare -A pgnunits  # Declare associative array
+    local branchpatt="$BRANCHPATT"
+
+    while IFS=" : " read -r key val; do
+        [[ -n "$key" ]] && units["$key"]="$val"  # Skip empty lines
+    done < "$SYSFILE"
+
+    while IFS="=" read -r key val; do
+        [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+        #dlog "-- pgnunits: $key -> $val"
+    done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+
+
+    # TODO: set default values
+    units["id"]="$TASKNAME"
+    units["prefix"]="$(jq -cr ".$ENVNAME.prefix" "$CONFIG_FILE")"
+    [[ ${units["prefix"]} = "null" ]] && units["prefix"]="PREFIX"
+
+    IFS='-/_' read -ra items <<< "$branchpatt"
+    for item in "${items[@]}"; do
+        lower_item="${item,,}" # to lower case
+
+        # HOTFIX: Set default values
+        if [ -z "${units["$lower_item"]}" ]; then
+            units["$lower_item"]="task"
+        fi
+
+        branchpatt="${branchpatt/$item/${units["$lower_item"]}}"
+    done
+
+    # Delete whitespaces in description
+    echo "${branchpatt// /_}"
+}
+
+function _gmux_init()
+{
+    local unitdir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/.tec/pgn"
+
+    find_config
+    [ -f "$CONFIG_FILE" ] && jq empty "$CONFIG_FILE" || exit 1
+
+    # Create necessary files and directories
+    if [ ! -d "$unitdir" ]; then
+        mkdir -p "$unitdir"
+    fi
+}
+
+function check_arg_env()
+{
+    if [ -z "$ENVNAME" ]; then
+        die "no environment name is passed"
+    elif [ ! -d "$TASKDIR/$ENVNAME" ]; then
+        die "'$ENVNAME': no such environment name"
+    fi
+}
+
+function get_and_check_desk()
+{
+    local curr=
+    local fname="$TASKDIR/$ENVNAME/.tec/toggles"
+
+    if [ -f "$fname" ]; then
+        curr="$(grep -i curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
+    fi
+
+    if [ -z "$DESKNAME" ]; then
+        DESKNAME="$curr"
+    fi
+
+    # check environment name
+    if [ -z "$DESKNAME" ]; then
+        die "no desk name is passed"
+    elif [ ! -d "$TASKDIR/$ENVNAME/$DESKNAME" ]; then
+        die "'$DESKNAME': no such desk name"
+    fi
+}
+
+function get_and_check_task()
+{
+    local curr=
+    local fname="$TASKDIR/$ENVNAME/$DESKNAME/.tec/toggles"
+
+    if [ -f "$fname" ]; then
+        curr="$(grep -i curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
+    fi
+
+    if [ -z "$TASKNAME" ]; then
+        TASKNAME="$curr"
+    fi
+
+    # check environment name
+    if [ -z "$TASKNAME" ]; then
+        die "no task ID is passed"
+    elif [ ! -d "$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME" ]; then
+        die "'$TASKNAME': no such task ID"
+    fi
+}
+
+function get_and_check_environment()
+{
+    local curr=
+    local fname="$TASKDIR/.tec/toggles"
+
+    if [ -f "$fname" ]; then
+        curr="$(grep -i curr "$fname" | cut -f 2 -d ':' | tr -d ' ')"
+    fi
+
+
+    if [ -z "$ENVNAME" ]; then
+        ENVNAME="$curr"
+    fi
+
+    # check environment name
+    if [ -z "$ENVNAME" ]; then
+        die "no environment name is passed"
+    elif [ ! -d "$TASKDIR/$ENVNAME" ]; then
+        die "'$ENVNAME': no such environment name"
+    fi
+}
+
+function _gmux_check_args()
+{
+    get_and_check_environment
+    get_and_check_desk
+    get_and_check_task
+}
+
+
+function gmux_commit()
+{
+    return 0
+}
+
+function gmux_delete()
+{
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
+    BRANCH_GEN=$(generate_branch)
+    BRANCH_ORG="$(cat "$PGNFILE" | grep branch | tr -s ' ' | cut -f 3 -d ' ')"
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
+
+        if working_tree_clean "$repodir"; then
+            git -C "$repodir" checkout -q "${pgnunits["branch"]}"
+            git -C "$repodir" branch -q -D "$BRANCH_ORG"
+
+            # Delete task branch from all submodules
+            git -C "$repodir" submodule foreach --quiet 'echo $path' | while read -r reponame; do
+                if working_tree_clean "$repodir"; then
+                    git -C "$repodir/$reponame" checkout -q "${pgnunits["branch"]}"
+                    git -C "$repodir/$reponame" branch -q -D "$BRANCH_ORG"
+                else
+                    elog "'${pgnunits["branch"]}':submodule: could not delete task branch cuz of uncommited changes"
+                    continue
+                fi
+            done
+        else
+            elog "'${pgnunits["branch"]}': could not delete task branch cuz of uncommited changes"
+            continue
+        fi
+        # TODO: delete branch name from gmux unit file ??
+    done <<< "$REPOS"
+}
+
+function gmux_help()
+{
+    usage
+}
+
+# TODO: Add init function
+function gmux_init()
+{
+    return 0;
+}
+
+# TODO: add merge strategies: merge, rebase, cherry-pick
+function gmux_merge()
+{
+    MERGEMODE="$1"
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
+    IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
+    #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
+
+    if [ -z "$MERGEMODE" ]; then
+        MERGEMODE="-r" # default is rebase mode
+    elif [ "$MERGEMODE" != "-m" ] && [ "$MERGEMODE" != "-c" ]; then
+        elog "'$MERGEMODE': no such merge option"
+    fi
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
+
+        BRANCH_GEN=$(generate_branch)
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
+
+        if working_tree_clean "$repodir"; then
+            branch_merge_for_merge "$repodir" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}" "$MERGEMODE"
+            git -C "$repodir" submodule foreach --quiet 'echo $path' | while read -r reponame; do
+                branch_merge_for_merge "$repodir/$reponame" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}" "$MERGEMODE"
+            done
+        fi
+    done <<< "$REPOS"
+}
+
+
+function gmux_revert()
+{
+    echo "under development: revert merge into default branhc"
+}
+
+function gmux_push()
+{
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
+    IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
+    #[[ ! -v "${pgnunits["prefix"]}" ]] && pgnunits["prefix"]="CPR"
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
+
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
+
+        if working_tree_clean "$repodir"; then
+            git -C "$repodir" submodule foreach --quiet 'echo $path' | while read -r reponame; do
+                echo "$reponame"
+                # push to remote repo
+            done
+        fi
+    done <<< "$REPOS"
+    echo "under development"
+}
+
+function gmux_show()
+{
+    local funit="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/.tec/pgn/gmux"
+
+    if [ ! -f "$funit" ]; then
+        elog "'$TASKNAME': unit file not found"
+        exit 1
+    fi
+    cat "$funit"
+}
+
+# TODO: have an error if branch is in unit file but not created in repo
+function gmux_sync()
+{
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
+
+    # TODO: Apply this check guard to all commands
+    if [ "$(jq -c ".$ENVNAME" "$CONFIG_FILE")" = "null" ]; then
+        return 0
+    fi
+
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
+    # roach:FIXME: will break a program when I add repo list in there
+    [ -f "$PGNFILE" ] && IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        [[ ! -v "${pgnunits["path"]}" ]] && pgnunits["path"]="$REPO_STORE"
+
+        BRANCH_GEN=$(generate_branch)
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
+
+        dlog "BRANCH_ORG: $BRANCH_ORG"
+        dlog "BRANCH_GEN: $BRANCH_GEN"
+        dlog
+
+        # clone repos
+        if [ ! -d "${pgnunits["path"]}/${pgnunits["name"]}" ]; then
+            dlog "clone repo '${pgnunits["name"]}'"
+            git clone -q --recursive "${pgnunits["link"]}" "${pgnunits["path"]}/${pgnunits["name"]}"
+        fi
+
+        # symlink 'em to task directory
+        if [ ! -L "$repodir" ]; then
+            dlog "link repodir: $repodir"
+            ln -s "${pgnunits["path"]}/${pgnunits["name"]}" "$repodir"
+        fi
+
+        # Create or rename task branch
+        # TODO: make sure created branch does not exist yet
+        # TODO: Add case when branch exists but gmux unit file is empty
+        if working_tree_clean "$repodir"; then
+            branch_create_or_rename "$repodir" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}"
+            dlog "sync: repodir: $repodir"
+            git -C "$repodir" submodule foreach --quiet 'echo $path' | while read -r reponame; do
+                if working_tree_clean "$repodir"; then
+                    branch_create_or_rename "$repodir/$reponame" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}"
+                    # Update task branch with default branch
+                    if ! branch_merge "$repodir/$reponame" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}"; then
+                        dlog "sync: repo-module '${pgnunits["name"]}/$reponame'"
+                        elog "'${pgnunits["name"]}/$reponame': submodule could not update task branch with default"
+                        continue
+                    fi
+                else
+                    elog "'${pgnunits["name"]}/$reponame': submodule has uncommited changes"
+                    continue
+                fi
+            done
+
+            # Update branch in gmux unit file
+            unit_set "$REPODIR/.tec/pgn/gmux" "branch" "$BRANCH_GEN"
+        else
+            elog "'${pgnunits["name"]}': repo has uncommited changes"
+            continue
+        fi
+
+        # Update task branch with default branch
+        if ! branch_merge "$repodir" "$BRANCH_ORG" "$BRANCH_GEN" "${pgnunits["branch"]}"; then
+            dlog "sync: merge default: $repodir -- '$?'"
+            elog "'${pgnunits["name"]}': repo could not update task branch with default"
+            continue
+        fi
+
+    done <<< "$REPOS"
+}
+
+function gmux_rsync()
+{
+    REPODIR="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME"
+    SYSFILE="$REPODIR/.tec/units"
+    PGNFILE="$REPODIR/.tec/pgn/gmux"
+    REPOS="$(jq -c ".$ENVNAME.repos[]" "$CONFIG_FILE")"
+    BRANCH_GEN=$(generate_branch)
+    [ -f "$PGNFILE" ] && IFS=" : " read -r key BRANCH_ORG < "$PGNFILE"
+
+    while read -r repo; do
+        declare -A pgnunits  # Declare associative array
+
+        # Read plugin units
+        while IFS="=" read -r key val; do
+            [[ -n "$key" ]] && pgnunits["$key"]="$val"  # Skip empty lines
+            #dlog "-- pgnunits: $key -> $val"
+        done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<< "$repo")
+        local repodir="$TASKDIR/$ENVNAME/$DESKNAME/$TASKNAME/${pgnunits["name"]}"
+
+        # TODO: add support for merge tactics: rebase, merge, cherry-pick
+        # TODO: what to do if merge conflict occurs??
+        # TODO: add support for submodules
+        if working_tree_clean "$repodir"; then
+            git -C "$repodir" checkout -q "${pgnunits["branch"]}"
+            git -C "$repodir" pull -q origin "${pgnunits["branch"]}"
+            git -C "$repodir" checkout -q "$BRANCH_ORG"
+            git -C "$repodir" rebase -q "${pgnunits["branch"]}"
+
+            # Update submodules
+            git -C "$repodir" submodule foreach --quiet 'echo $path' | while read -r reponame; do
+                git -C "$repodir/$reponame" checkout -q "${pgnunits["branch"]}"
+                git -C "$repodir/$reponame" pull -q origin "${pgnunits["branch"]}"
+                git -C "$repodir/$reponame" checkout -q "$BRANCH_ORG"
+                git -C "$repodir/$reponame" rebase -q "${pgnunits["branch"]}"
+            done
+        else
+            elog "'${pgnunits["branch"]}': could not pull from remote branch cuz of uncommited changes"
+        fi
+    done <<< "$REPOS"
+}
+
+
+# Driver part of the code
+OPTS=$(getopt -o d:e:Di:P:T:hV --long desk:,env:,debug,taskid:,pgndir:,taskdir:help,version -n "$PGNAME" -- "$@")
+if [ $? -ne 0 ]; then
+    #echo "error parsing options" >&2
+    exit 1
+fi
+
+## Reset the positional parameters to the parsed options
+eval set -- "$OPTS"
+
+while true; do
+    case "$1" in
+        -d)
+            DESKNAME="$2"
+            shift 2
+            ;;
+        -i)
+            TASKNAME="$2"
+            shift 2
+            ;;
+        -e)
+            ENVNAME="$2"
+            shift 2
+            ;;
+        -D)
+            ISDEBUG=true
+            shift 1
+            ;;
+        -P)
+            PGNDIRBASE="$2"
+            shift 2
+            ;;
+        -T)
+            TASKDIR="$2"
+            shift 2
+            ;;
+        -V)
+            echo "$PGNAME: $VERSION"
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            elog "invalid option '$1'"
+            exit 1
+    esac
+done
+
+gmux() {
+    local command=
+
+    [ $# -eq 0 ] && set -- "show" # set default command
+    command="$1"; shift
+
+    # TODO: move it to a function
+    # Setup some stuff
+    REPO_STORE="$TASKDIR/.tec/pgn/gmux"
+
+    _gmux_check_args
+    _gmux_init
+
+    case "$command" in
+        "commit")       shift; gmux_commit "$@" ;;
+        "delete")       shift; gmux_delete "$@" ;;
+        "help")         shift; gmux_help "$@" ;;
+        "init")         shift; gmux_init "$@" ;;
+        "merge")        shift; gmux_merge "$@" ;;
+        "revert")       shift; gmux_revert "$@" ;;
+        "show")         shift; gmux_show "$@" ;;
+        "sync")         shift; gmux_sync "$@" ;;
+        "rsync")        shift; gmux_rsync "$@" ;;
+        *)              die "'$command': no such command"
+    esac
+}
+
+gmux "$@"

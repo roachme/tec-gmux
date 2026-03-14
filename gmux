@@ -182,8 +182,11 @@ class Config(Log):
         with open(fname) as file:
             self.config = json.load(file)
 
-    def _get_defaults(self):
-        return {}
+    def _get_defaults(self, cfg):
+        cfg.setdefault("prefix", "gmux")
+        cfg.setdefault("branchpatt", "TYPE/PREFIX-ID_DESC_DATE")
+        cfg.setdefault("repos", [])
+        return cfg
 
     def _get_config_file(self):
         paths = [
@@ -196,10 +199,11 @@ class Config(Log):
         return None
 
     def get(self, env):
+        cfg = {}
         for k, v in self.config.items():
             if k == env:
-                return v
-        return self._get_defaults()
+                cfg = v
+        return self._get_defaults(cfg)
 
 
 class Unit:

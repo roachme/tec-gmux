@@ -400,6 +400,9 @@ class Gmux(Repo):
         unit = Unit(self._getpath())
 
         for taskid in self.taskids:
+            if self.args.task_exist(taskid) is False:
+                self.log.err("'%s': no such task ID", taskid)
+                continue
             units = unit.get(taskid)
             for key, value in units.items():
                 print(f"{key} : {value}")

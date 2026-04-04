@@ -443,28 +443,7 @@ class Gmux(Repo):
         return retcode
 
     def rsync(self):
-        retcode = 0
-        dst = self._getpath()
-        unit = Unit(dst)
-        branch = Branch(self.settings['branchpatt'])
-        repo = Repo(self.settings, self.args.taskbase)
-
-        # def pull(self, branch_name=None, remote_name="origin"):
-
-        # TODO: Execute the same for submodules if needed
-        for taskid in self.taskids:
-            if self.args.task_exist(taskid) is False:
-                self.log.err("'%s': no such task ID", taskid)
-                continue
-
-            unit.make_dir(taskid)
-            repo.symlink(dst, taskid)
-            units = unit.getall(taskid)
-            branch_name = units.get('branch')
-
-            repo.branch_switch(self.settings['branch'])
-            repo.branch_pull(self.settings['branch'])
-        return retcode
+        print("under development")
 
 parser = argparse.ArgumentParser(description="Git multiplexer")
 parser.add_argument("-e", "--env", help="environment name")

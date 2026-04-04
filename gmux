@@ -10,7 +10,6 @@ import argparse
 
 """
 TODO:
-    1. What if there is a cloned directory of managed repo in task directory?
 """
 
 pgname = "tec-gmux"
@@ -67,11 +66,16 @@ class Repo(Log):
         self.clone()
 
     def clone(self):
-        # TODO: make sure submodules get cloned as well
         for cfg in self.config['repos']:
-            repodir = self.path + cfg['name']
+            repodir = "/".join([self.path + cfg['name']])
             if not os.path.exists(repodir):
-                pygit2.clone_repository(cfg['link'], repodir)
+                repo = pygit2.clone_repository(cfg['link'], repodir)
+            else:
+                repo = pygit2.Repository(repodir)
+
+            for submodule in repo.submodules:
+                submodule.init()
+                submodule.update(init=True)
         return True
 
     def symlink(self, dst, taskid):

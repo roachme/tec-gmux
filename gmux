@@ -307,9 +307,13 @@ class TecArgs(Log):
 
     # TODO: use class Unit()
     def get_curr_taskID(self):
-        fname = "/".join([self.taskbase, self.env, self.desk, ".tec/toggles"])
-        with open(fname) as file:
-            lines = file.readlines()
+        lines = []
+        fname = "/".join([self.taskbase, self.env, self.desk, self.path_suffix])
+
+        # Current task ID might not exist, and it is fine
+        if os.path.exists(fname):
+            with open(fname) as file:
+                lines = file.readlines()
 
         if len(lines) > 0:
             # TODO: add a better parser cuz ' :' might not get parsed

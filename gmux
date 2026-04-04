@@ -68,17 +68,17 @@ class Repo(Log):
 
     def clone(self):
         # TODO: make sure submodules get cloned as well
-        for _repo in self.config['repos']:
-            repodir = self.path + _repo['name']
+        for cfg in self.config['repos']:
+            repodir = self.path + cfg['name']
             if not os.path.exists(repodir):
-                pygit2.clone_repository(_repo['link'], repodir)
+                pygit2.clone_repository(cfg['link'], repodir)
         return True
 
     def symlink(self, dst, taskid):
         dst = "/".join([dst, taskid])
-        for _repo in self.config['repos']:
-            repo_src = self.path + _repo['name']
-            repo_dst = "/".join([dst, _repo['name']])
+        for cfg in self.config['repos']:
+            repo_src = self.path + cfg['name']
+            repo_dst = "/".join([dst, cfg['name']])
             if not os.path.exists(repo_src):
                 self.log.err("repo not cloned yet")
             elif not os.path.islink(repo_dst):
@@ -87,17 +87,17 @@ class Repo(Log):
     def branch_switch(self, branch_name):
         # TODO: switch branch in submodules as well
         # TODO: let not nonexisting brach to break the loop
-        for _repo in self.config['repos']:
+        for cfg in self.config['repos']:
             try:
-                repo = pygit2.Repository(self.path + _repo['name'])
+                repo = pygit2.Repository(self.path + cfg['name'])
 
                 # TODO: check that repo has no uncommited changes
-                if _repo["branch"] not in repo.branches:
-                    self.log.err("'%s': no such base branch in repo '%s'", _repo["branch"], _repo["name"])
+                if cfg["branch"] not in repo.branches:
+                    self.log.err("'%s': no such base branch in repo '%s'", cfg["branch"], cfg["name"])
                 elif branch_name not in repo.branches:
-                    self.log.err("'%s': no such task branch in repo '%s'", _repo["branch"], _repo["name"])
-                elif _repo["name"] == repo.head.shorthand:
-                    self.log.info("already on base branch '%s'", _repo["name"])
+                    self.log.err("'%s': no such task branch in repo '%s'", cfg["branch"], cfg["name"])
+                elif cfg["name"] == repo.head.shorthand:
+                    self.log.info("already on base branch '%s'", cfg["name"])
                 else:
                     repo.checkout(repo.branches[branch_name])
             except pygit2.GitError as e:
@@ -105,34 +105,33 @@ class Repo(Log):
         return True
 
     def branch_remove(self, branch_name):
-        for _repo in self.config['repos']:
-            repo = pygit2.Repository(self.path + _repo['name'])
+        for cfg in self.config['repos']:
+            repo = pygit2.Repository(self.path + cfg['name'])
             if branch_name in repo.branches:
-                if self._has_uncommited_changes(_repo['name']) == False:
-                    repo.checkout(repo.branches[_repo['branch']])
+                if self._has_uncommited_changes(cfg['name']) == False:
+                    repo.checkout(repo.branches[cfg['branch']])
                     repo.branches.delete(branch_name)
                 else:
-                    self.log.err("%s: repo has uncommited changes", _repo['name'])
+                    self.log.err("%s: repo has uncommited changes", cfg['name'])
 
-    # repo.branch_update(branch_stored, branch_generated)
     def branch_update(self, oldbranch, newbranch):
-        for _repo in self.config['repos']:
+        for cfg in self.config['repos']:
             if oldbranch == newbranch:
-                if self._has_uncommited_changes(_repo['name']) == True:
-                    self.log.err(f"repo {_repo['name']} has uncommited changes")
-                elif self._branch_exist(_repo['name'], oldbranch) == False:
-                    self._branch_create(_repo['name'], oldbranch, _repo['branch'])
+                if self._has_uncommited_changes(cfg['name']) == True:
+                    self.log.err(f"repo {cfg['name']} has uncommited changes")
+                elif self._branch_exist(cfg['name'], oldbranch) == False:
+                    self._branch_create(cfg['name'], oldbranch, cfg['branch'])
             elif oldbranch is not None:
-                self._branch_rename(_repo['name'], oldbranch, newbranch)
-            elif self._branch_exist(_repo['name'], newbranch) == False:
-                self._branch_create(_repo['name'], newbranch, _repo['branch'])
+                self._branch_rename(cfg['name'], oldbranch, newbranch)
+            elif self._branch_exist(cfg['name'], newbranch) == False:
+                self._branch_create(cfg['name'], newbranch, cfg['branch'])
 
     def branch_pull(self, branch_name, origin):
         if origin == None:
             origin = "origin"
-        for _repo in self.config['repos']:
-            repo = pygit2.Repository(self.path + _repo['name'])
-            if self._has_uncommited_changes(_repo['name']) == True:
+        for cfg in self.config['repos']:
+            repo = pygit2.Repository(self.path + cfg['name'])
+            if self._has_uncommited_changes(cfg['name']) == True:
                 self.err("'%s' has uncommited changes")
                 continue
             repo.checkout(repo.branches[branch_name])
@@ -140,23 +139,23 @@ class Repo(Log):
 
     def _has_uncommited_changes(self, reponame):
         repo = pygit2.Repository(self.path + reponame)
-        for _repo in self.config['repos']:
+        for cfg in self.config['repos']:
             status = repo.status()
-            if _repo['name'] == reponame and bool(status) == True:
+            if cfg['name'] == reponame and bool(status) == True:
                 return True
         return False
 
     def _branch_exist(self, reponame, branchname):
         repo = pygit2.Repository(self.path + reponame)
-        for _repo in self.config['repos']:
-            if _repo['name'] == reponame and branchname in repo.branches:
+        for cfg in self.config['repos']:
+            if cfg['name'] == reponame and branchname in repo.branches:
                 return True
         return False
 
     def _branch_create(self, reponame, new_branch_name, src_branch_name):
         repo = pygit2.Repository(self.path + reponame)
-        for _repo in self.config['repos']:
-            if _repo['name'] == reponame:
+        for cfg in self.config['repos']:
+            if cfg['name'] == reponame:
                 src_branch = repo.branches[src_branch_name]
                 new_branch = repo.branches.local.create(new_branch_name, repo[src_branch.target])
                 return True
@@ -164,8 +163,8 @@ class Repo(Log):
 
     def _branch_rename(self, reponame, old_branch, new_branch):
         repo = pygit2.Repository(self.path + reponame)
-        for _repo in self.config['repos']:
-            if _repo['name'] == reponame:
+        for cfg in self.config['repos']:
+            if cfg['name'] == reponame:
                 branch = repo.branches.local[old_branch]
                 branch.rename(new_branch)
                 return True
@@ -437,10 +436,12 @@ class Gmux(Repo):
 
     def rsync(self):
         retcode = 0
+        dst = self._getpath()
+        unit = Unit(dst)
+        branch = Branch(self.settings['branchpatt'])
         repo = Repo(self.settings, self.args.taskbase)
 
-        self.err("under development")
-        return 0
+        # def pull(self, branch_name=None, remote_name="origin"):
 
         # TODO: Execute the same for submodules if needed
         for taskid in self.taskids:

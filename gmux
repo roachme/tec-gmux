@@ -7,6 +7,7 @@ import json
 import copy
 import pygit2
 import argparse
+from pygit2 import GIT_MERGE_ANALYSIS_FASTFORWARD, GIT_MERGE_ANALYSIS_NORMAL, GIT_MERGE_ANALYSIS_UP_TO_DATE
 
 """
 TODO:
@@ -14,6 +15,77 @@ TODO:
 
 pgname = "tec-gmux"
 default_cmd = "show"
+
+
+def fetch(repo, remote_name='origin'):
+    remote = repo.remotes[remote_name]
+    remote.fetch()
+
+def merge(repo, remote_name='origin', branch='master'):
+    """
+    Performs a git pull equivalent: fetches the remote and updates the local branch.
+
+    Args:
+        repo: pygit2.Repository instance
+        remote_name: Name of the remote (e.g., 'origin')
+        branch: Name of the branch to pull (e.g., 'master')
+    """
+
+    # 1. Get the remote tracking branch reference
+    remote_branch_name = f'refs/remotes/{remote_name}/{branch}'
+    remote_commit_id = repo.lookup_reference(remote_branch_name).target
+    remote_commit = repo.get(remote_commit_id)
+
+    # 2. Analyze if and how we can merge
+    merge_result, _ = repo.merge_analysis(remote_commit_id)
+
+    # 3. Case 1: Already up to date
+    if merge_result & GIT_MERGE_ANALYSIS_UP_TO_DATE:
+        print("Already up to date.")
+        return
+
+    # 4. Case 2: Fast-forward possible
+    elif merge_result & GIT_MERGE_ANALYSIS_FASTFORWARD:
+        print("Fast-forwarding...")
+        # Move the branch reference and HEAD to the remote commit
+        repo.checkout_tree(remote_commit)
+        branch_ref = repo.lookup_reference(f'refs/heads/{branch}')
+        branch_ref.set_target(remote_commit_id)
+        repo.head.set_target(remote_commit_id)
+        #print(f"Updated to {remote_commit_id.hex}")
+
+    # 5. Case 3: True merge required
+    elif merge_result & GIT_MERGE_ANALYSIS_NORMAL:
+        print("Merging...")
+        # Perform the merge
+        repo.merge(remote_commit_id)
+
+        # Check for conflicts
+        if repo.index.conflicts:
+            print("Conflicts detected! Please resolve them manually.")
+            # You can iterate through conflicts if needed:
+            # for conflict in repo.index.conflicts:
+            #     print(f"Conflict in: {conflict[0].path}")
+            return
+
+        # No conflicts: commit the merge
+        user = repo.default_signature
+        tree = repo.index.write_tree()
+        repo.create_commit(
+            'HEAD',
+            user,
+            user,
+            f"Merge remote branch '{remote_name}/{branch}'",
+            tree,
+            [repo.head.target, remote_commit_id]
+        )
+        # Clean up merge state
+        repo.state_cleanup()
+        print("Merge completed successfully.")
+
+    else:
+        raise RuntimeError("Unknown merge analysis result")
+
 
 class Log:
     def __init__(self):
@@ -88,6 +160,44 @@ class Repo(Log):
             elif not os.path.islink(repo_dst):
                 os.symlink(repo_src, repo_dst)
 
+    def fetch(self, remote_name="origin"):
+        for cfg in self.config['repos']:
+            repo = pygit2.Repository(self.path + cfg['name'])
+            fetch(repo)
+        return True
+
+    def fetch(self, remote_name="origin"):
+        for cfg in self.config['repos']:
+            repo = pygit2.Repository(self.path + cfg['name'])
+            fetch(repo, 'origin')
+        return True
+
+    def merge(self, remote_name="origin"):
+        for cfg in self.config['repos']:
+            repo = pygit2.Repository(self.path + cfg['name'])
+            merge(repo, 'origin', cfg['branch'])
+        return True
+
+    # TODO: find a way to join this function and branch_switch()
+    def branch_switch_default(self):
+        # TODO: switch branch in submodules as well
+        # TODO: let not nonexisting brach to break the loop
+        for cfg in self.config['repos']:
+            try:
+                branch_name = cfg["branch"]
+                repo = pygit2.Repository(self.path + cfg['name'])
+
+                # TODO: check that repo has no uncommited changes
+                if branch_name not in repo.branches:
+                    self.log.err("'%s': no such default branch in repo '%s'", cfg["branch"], cfg["name"])
+                elif branch_name == repo.head.shorthand:
+                    self.log.info("already on default branch '%s'", cfg["name"])
+                else:
+                    repo.checkout(repo.branches[branch_name])
+            except pygit2.GitError as e:
+                self.err("git error")
+        return True
+
     def branch_switch(self, branch_name):
         # TODO: switch branch in submodules as well
         # TODO: let not nonexisting brach to break the loop
@@ -129,17 +239,6 @@ class Repo(Log):
                 self._branch_rename(cfg['name'], oldbranch, newbranch)
             elif self._branch_exist(cfg['name'], newbranch) == False:
                 self._branch_create(cfg['name'], newbranch, cfg['branch'])
-
-    def branch_pull(self, branch_name, origin):
-        if origin == None:
-            origin = "origin"
-        for cfg in self.config['repos']:
-            repo = pygit2.Repository(self.path + cfg['name'])
-            if self._has_uncommited_changes(cfg['name']) == True:
-                self.err("'%s' has uncommited changes")
-                continue
-            repo.checkout(repo.branches[branch_name])
-
 
     def _has_uncommited_changes(self, reponame):
         repo = pygit2.Repository(self.path + reponame)
@@ -434,6 +533,7 @@ class Gmux(Repo):
 
             repo.branch_update(branch_stored, branch_generated)
             repo.branch_switch(branch_generated)
+            repo.merge()
 
             if branch_stored != branch_generated:
                 unit.set({ 'branch' : branch_generated })
@@ -441,7 +541,27 @@ class Gmux(Repo):
         return retcode
 
     def rsync(self):
-        print("under development")
+        retcode = 0
+        dst = self._getpath()
+        unit = Unit(dst)
+        branch = Branch(self.settings['branchpatt'])
+        repo = Repo(self.settings, self.args.taskbase)
+
+        # TODO: Execute the same for submodules if needed
+        for taskid in self.taskids:
+            if self.args.task_exist(taskid) is False:
+                self.log.err("'%s': no such task ID", taskid)
+                continue
+
+            unit.make_dir(taskid)
+            repo.symlink(dst, taskid)
+            units = unit.getall(taskid)
+            branch_name = units.get('branch')
+
+            repo.branch_switch_default()
+            repo.fetch()
+            repo.merge()
+        return retcode
 
 
 def parse_args():

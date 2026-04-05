@@ -443,18 +443,21 @@ class Gmux(Repo):
     def rsync(self):
         print("under development")
 
-parser = argparse.ArgumentParser(description="Git multiplexer")
-parser.add_argument("-e", "--env", help="environment name")
-parser.add_argument("-d", "--desk", help="desk name")
-parser.add_argument("-P", "--pgnbase", help="pgn directory base")
-parser.add_argument("-T", "--taskbase", help="task directory base")
-parser.add_argument("cmd", default=default_cmd, nargs='?', type=str, help="subcommand")
-parser.add_argument("taskids", type=str, nargs='*', help="task ID")
-args = parser.parse_args()
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Git multiplexer")
+    parser.add_argument("-e", "--env", help="environment name")
+    parser.add_argument("-d", "--desk", help="desk name")
+    parser.add_argument("-P", "--pgnbase", help="pgn directory base")
+    parser.add_argument("-T", "--taskbase", help="task directory base")
+    parser.add_argument("cmd", default=default_cmd, nargs='?', type=str, help="subcommand")
+    parser.add_argument("taskids", type=str, nargs='*', help="task ID")
+    args = parser.parse_args()
+    return args
 
 def main():
     log = Log()
+    args = parse_args()
     gmux = Gmux(args.taskbase, args.env, args.desk, args.taskids)
     cmd = getattr(gmux, args.cmd, None)
 
@@ -462,6 +465,6 @@ def main():
         res = cmd()
     else:
         res = log.err(f"'{args.cmd}': no such command")
-    sys.exit(res)
+    return res
 
-main()
+sys.exit(main())

@@ -381,9 +381,7 @@ class Gmux(Repo):
             repo.symlink(dst, taskid)
             units = unit.getall(taskid)
             branch_stored = units.get('branch')
-            branch_generated = branch.generate(units, self.settings['prefix'])
-
-            repo.branch_remove(branch_generated)
+            repo.branch_remove(branch_stored)
         return retcode
 
     def help(self):

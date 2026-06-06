@@ -2,19 +2,174 @@
 
 import os
 import re
+import copy
 import sys
 import json
 import copy
 import pygit2
 import argparse
+from pygit2 import GIT_MERGE_ANALYSIS_FASTFORWARD, GIT_MERGE_ANALYSIS_NORMAL, GIT_MERGE_ANALYSIS_UP_TO_DATE
+
+
+# HOTFIX: cuz args.taskids is for help command and task IDs.
+# Gmux() sets current task ID by default, but it is wrong value when command
+# 'help' is invoked.
+COMMAND = None
 
 """
 TODO:
-    1. What if there is a cloned directory of managed repo in task directory?
 """
 
 pgname = "tec-gmux"
 default_cmd = "show"
+
+
+helpmsg = {
+    'remove': {
+        'tag' : "basic",
+        'synop': "Usage: tec gmux rm [OPTION]... [ID]...",
+        'desc_short': "Remove gmux unit values.",
+        'desc_long':
+        """
+     Options:
+       -h        show help message and exit
+       -v        verbose mode
+
+     Arguments:
+       ID        Task ID, if not passed then current task ID is used
+
+     Exit status:
+       Under development
+        """,
+    },
+    'rsync': {
+        'tag' : "basic",
+        'synop': "Usage: tec gmux rsync [OPTION]...",
+        'desc_short': "Update task branch with remote",
+        'desc_long':
+        """
+     Options:
+       -h        show help message and exit
+       -r        rebase branch against default branch
+       -v        verbose mode
+
+     Arguments:
+       ID        Task ID, if not passed then current task ID is used
+
+     Exit status:
+       Under development
+       """,
+    },
+    'show': {
+        'tag' : "basic",
+        'synop': "Usage: tec gmux show [OPTION]... [ID]...",
+        'desc_short': "Show gmux unit values.",
+        'desc_long':
+        """
+     Options:
+       -h        show help message and exit
+       -v        verbose mode
+
+     Arguments:
+       ID        Task ID, if not passed then current task ID is used
+
+     Exit status:
+       Under development
+        """,
+    },
+    'sync': {
+        'tag' : "basic",
+        'synop': "Usage: tec gmux sync [OPTION]...",
+        'desc_short': "Update task branch",
+        'desc_long':
+        """
+     Options:
+       -h        show help message and exit
+       -r        rebase branch against default branch
+       -v        verbose mode
+
+     Arguments:
+       ID        Task ID, if not passed then current task ID is used
+
+     Exit status:
+       Under development
+       """,
+    },
+}
+
+def has_uncommited_changes(repo):
+    status = repo.status()
+    return len(status) > 0
+
+def fetch(repo, remote_name='origin'):
+    remote = repo.remotes[remote_name]
+    remote.fetch()
+
+def merge(repo, remote_name='origin', branch='master'):
+    """
+    Performs a git pull equivalent: fetches the remote and updates the local branch.
+
+    Args:
+        repo: pygit2.Repository instance
+        remote_name: Name of the remote (e.g., 'origin')
+        branch: Name of the branch to pull (e.g., 'master')
+    """
+
+    # 1. Get the remote tracking branch reference
+    remote_branch_name = f'refs/remotes/{remote_name}/{branch}'
+    remote_commit_id = repo.lookup_reference(remote_branch_name).target
+    remote_commit = repo.get(remote_commit_id)
+
+    # 2. Analyze if and how we can merge
+    merge_result, _ = repo.merge_analysis(remote_commit_id)
+
+    # 3. Case 1: Already up to date
+    if merge_result & GIT_MERGE_ANALYSIS_UP_TO_DATE:
+        print("Already up to date.")
+        return
+
+    # 4. Case 2: Fast-forward possible
+    elif merge_result & GIT_MERGE_ANALYSIS_FASTFORWARD:
+        print("Fast-forwarding...")
+        # Move the branch reference and HEAD to the remote commit
+        repo.checkout_tree(remote_commit)
+        branch_ref = repo.lookup_reference(f'refs/heads/{branch}')
+        branch_ref.set_target(remote_commit_id)
+        repo.head.set_target(remote_commit_id)
+        #print(f"Updated to {remote_commit_id.hex}")
+
+    # 5. Case 3: True merge required
+    elif merge_result & GIT_MERGE_ANALYSIS_NORMAL:
+        print("Merging...")
+        # Perform the merge
+        repo.merge(remote_commit_id)
+
+        # Check for conflicts
+        if repo.index.conflicts:
+            print("Conflicts detected! Please resolve them manually.")
+            # You can iterate through conflicts if needed:
+            # for conflict in repo.index.conflicts:
+            #     print(f"Conflict in: {conflict[0].path}")
+            return
+
+        # No conflicts: commit the merge
+        user = repo.default_signature
+        tree = repo.index.write_tree()
+        repo.create_commit(
+            'HEAD',
+            user,
+            user,
+            f"Merge remote branch '{remote_name}/{branch}'",
+            tree,
+            [repo.head.target, remote_commit_id]
+        )
+        # Clean up merge state
+        repo.state_cleanup()
+        print("Merge completed successfully.")
+
+    else:
+        raise RuntimeError("Unknown merge analysis result")
+
 
 class Log:
     def __init__(self):
@@ -38,7 +193,7 @@ class Branch(Log):
         self.pattern = pattern
         self.branch_stored = None
 
-    def generate(self, units, prefix):
+    def generate(self, units, prefix, tasktype):
         delimiters = r'[/_-]+'
         pattern = copy.deepcopy(self.pattern)
 
@@ -51,6 +206,8 @@ class Branch(Log):
 
         # HOTFIX: replace prefix as well
         pattern = pattern.replace("PREFIX", prefix)
+        # HOTFIX: replace task type as well
+        pattern = pattern.replace("TYPE", tasktype)
 
         #print("--> new pattern", pattern)
         return pattern # i.e. newly generated branch
@@ -67,37 +224,97 @@ class Repo(Log):
         self.clone()
 
     def clone(self):
-        # TODO: make sure submodules get cloned as well
-        for _repo in self.config['repos']:
-            repodir = self.path + _repo['name']
+        for cfg in self.config['repos']:
+            repodir = "/".join([self.path + cfg['name']])
             if not os.path.exists(repodir):
-                pygit2.clone_repository(_repo['link'], repodir)
+                repo = pygit2.clone_repository(cfg['link'], repodir)
+            else:
+                repo = pygit2.Repository(repodir)
+
+            for submodule in repo.submodules:
+                submodule.init()
+                submodule.update(init=True)
         return True
 
     def symlink(self, dst, taskid):
         dst = "/".join([dst, taskid])
-        for _repo in self.config['repos']:
-            repo_src = self.path + _repo['name']
-            repo_dst = "/".join([dst, _repo['name']])
+        for cfg in self.config['repos']:
+            repo_src = self.path + cfg['name']
+            repo_dst = "/".join([dst, cfg['name']])
             if not os.path.exists(repo_src):
                 self.log.err("repo not cloned yet")
             elif not os.path.islink(repo_dst):
                 os.symlink(repo_src, repo_dst)
 
+    def has_uncommited_changes(self):
+        status = False
+        for cfg in self.config['repos']:
+            repo = pygit2.Repository(self.path + cfg['name'])
+            if has_uncommited_changes(repo) == True:
+                status = True
+                print(f"repo '{cfg['name']}' has uncommited changes")
+        return status
+
+    def fetch(self, remote_name="origin"):
+        for cfg in self.config['repos']:
+            repo = pygit2.Repository(self.path + cfg['name'])
+            if has_uncommited_changes(repo) == True:
+                print("ERROR:", cfg['name'], "has uncommited changes")
+                continue
+            self.log.info("fetching repo '%s'", cfg["name"])
+            fetch(repo, 'origin')
+        return True
+
+    def merge(self, remote_name="origin"):
+        for cfg in self.config['repos']:
+            repo = pygit2.Repository(self.path + cfg['name'])
+            merge(repo, 'origin', cfg['branch'])
+        return True
+
+    # Get default branch name from remote
+    def branch_get_default(self, repo):
+        remote_head = repo.references.get("refs/remotes/origin/HEAD")
+        if remote_head:
+            default_branch = remote_head.resolve().shorthand.replace('origin/', '')
+            return default_branch
+        return None
+
+    # TODO: find a way to join this function and branch_switch()
+    def branch_switch_default(self):
+        status = True
+        # TODO: switch branch in submodules as well
+        # TODO: let not nonexisting brach to break the loop
+        for cfg in self.config['repos']:
+            try:
+                branch_name = cfg["branch"]
+                repo = pygit2.Repository(self.path + cfg['name'])
+
+                # TODO: check that repo has no uncommited changes
+                if branch_name not in repo.branches:
+                    self.log.err("'%s': no such default branch in repo '%s'", cfg["branch"], cfg["name"])
+                elif branch_name == repo.head.shorthand:
+                    self.log.info("already on default branch '%s'", cfg["name"])
+                else:
+                    repo.checkout(repo.branches[branch_name])
+            except pygit2.GitError as e:
+                self.log.err("git error: %s", cfg['name'])
+                status = False
+        return status
+
     def branch_switch(self, branch_name):
         # TODO: switch branch in submodules as well
         # TODO: let not nonexisting brach to break the loop
-        for _repo in self.config['repos']:
+        for cfg in self.config['repos']:
             try:
-                repo = pygit2.Repository(self.path + _repo['name'])
+                repo = pygit2.Repository(self.path + cfg['name'])
 
                 # TODO: check that repo has no uncommited changes
-                if _repo["branch"] not in repo.branches:
-                    self.log.err("'%s': no such base branch in repo '%s'", _repo["branch"], _repo["name"])
+                if cfg["branch"] not in repo.branches:
+                    self.log.err("'%s': no such base branch in repo '%s'", cfg["branch"], cfg["name"])
                 elif branch_name not in repo.branches:
-                    self.log.err("'%s': no such task branch in repo '%s'", _repo["branch"], _repo["name"])
-                elif _repo["name"] == repo.head.shorthand:
-                    self.log.info("already on base branch '%s'", _repo["name"])
+                    self.log.err("'%s': no such task branch in repo '%s'", cfg["branch"], cfg["name"])
+                elif cfg["name"] == repo.head.shorthand:
+                    self.log.info("already on base branch '%s'", cfg["name"])
                 else:
                     repo.checkout(repo.branches[branch_name])
             except pygit2.GitError as e:
@@ -105,58 +322,47 @@ class Repo(Log):
         return True
 
     def branch_remove(self, branch_name):
-        for _repo in self.config['repos']:
-            repo = pygit2.Repository(self.path + _repo['name'])
+        for cfg in self.config['repos']:
+            repo = pygit2.Repository(self.path + cfg['name'])
             if branch_name in repo.branches:
-                if self._has_uncommited_changes(_repo['name']) == False:
-                    repo.checkout(repo.branches[_repo['branch']])
+                if self._has_uncommited_changes(cfg['name']) == False:
+                    repo.checkout(repo.branches[cfg['branch']])
                     repo.branches.delete(branch_name)
                 else:
-                    self.log.err("%s: repo has uncommited changes", _repo['name'])
+                    self.log.err("%s: repo has uncommited changes", cfg['name'])
 
-    # repo.branch_update(branch_stored, branch_generated)
+
     def branch_update(self, oldbranch, newbranch):
-        for _repo in self.config['repos']:
+        for cfg in self.config['repos']:
             if oldbranch == newbranch:
-                if self._has_uncommited_changes(_repo['name']) == True:
-                    self.log.err(f"repo {_repo['name']} has uncommited changes")
-                elif self._branch_exist(_repo['name'], oldbranch) == False:
-                    self._branch_create(_repo['name'], oldbranch, _repo['branch'])
+                if self._has_uncommited_changes(cfg['name']) == True:
+                    self.log.err(f"{cfg['name']}: has uncommited changes")
+                elif self._branch_exist(cfg['name'], oldbranch) == False:
+                    self._branch_create(cfg['name'], oldbranch, cfg['branch'])
             elif oldbranch is not None:
-                self._branch_rename(_repo['name'], oldbranch, newbranch)
-            elif self._branch_exist(_repo['name'], newbranch) == False:
-                self._branch_create(_repo['name'], newbranch, _repo['branch'])
-
-    def branch_pull(self, branch_name, origin):
-        if origin == None:
-            origin = "origin"
-        for _repo in self.config['repos']:
-            repo = pygit2.Repository(self.path + _repo['name'])
-            if self._has_uncommited_changes(_repo['name']) == True:
-                self.err("'%s' has uncommited changes")
-                continue
-            repo.checkout(repo.branches[branch_name])
-
+                self._branch_rename(cfg['name'], oldbranch, newbranch)
+            elif self._branch_exist(cfg['name'], newbranch) == False:
+                self._branch_create(cfg['name'], newbranch, cfg['branch'])
 
     def _has_uncommited_changes(self, reponame):
         repo = pygit2.Repository(self.path + reponame)
-        for _repo in self.config['repos']:
+        for cfg in self.config['repos']:
             status = repo.status()
-            if _repo['name'] == reponame and bool(status) == True:
+            if cfg['name'] == reponame and bool(status) == True:
                 return True
         return False
 
     def _branch_exist(self, reponame, branchname):
         repo = pygit2.Repository(self.path + reponame)
-        for _repo in self.config['repos']:
-            if _repo['name'] == reponame and branchname in repo.branches:
+        for cfg in self.config['repos']:
+            if cfg['name'] == reponame and branchname in repo.branches:
                 return True
         return False
 
     def _branch_create(self, reponame, new_branch_name, src_branch_name):
         repo = pygit2.Repository(self.path + reponame)
-        for _repo in self.config['repos']:
-            if _repo['name'] == reponame:
+        for cfg in self.config['repos']:
+            if cfg['name'] == reponame:
                 src_branch = repo.branches[src_branch_name]
                 new_branch = repo.branches.local.create(new_branch_name, repo[src_branch.target])
                 return True
@@ -164,8 +370,8 @@ class Repo(Log):
 
     def _branch_rename(self, reponame, old_branch, new_branch):
         repo = pygit2.Repository(self.path + reponame)
-        for _repo in self.config['repos']:
-            if _repo['name'] == reponame:
+        for cfg in self.config['repos']:
+            if cfg['name'] == reponame:
                 branch = repo.branches.local[old_branch]
                 branch.rename(new_branch)
                 return True
@@ -183,9 +389,10 @@ class Config(Log):
             self.config = json.load(file)
 
     def _get_defaults(self, cfg):
-        cfg.setdefault("prefix", "gmux")
-        cfg.setdefault("branchpatt", "TYPE/PREFIX-ID_DESC_DATE")
         cfg.setdefault("repos", [])
+        cfg.setdefault("prefix", "gmux")
+        cfg.setdefault("type", "feature")
+        cfg.setdefault("branchpatt", "TYPE/PREFIX-ID_DESC_DATE")
         return cfg
 
     def _get_config_file(self):
@@ -246,6 +453,7 @@ class Unit:
 
     def set(self, units):
         for key, val in units.items():
+            print("-- key, val", key, val)
             self.unitpgn[key] = val
 
     def save(self, taskid):
@@ -308,14 +516,20 @@ class TecArgs(Log):
 
     # TODO: use class Unit()
     def get_curr_taskID(self):
-        fname = "/".join([self.taskbase, self.env, self.desk, ".tec/toggles"])
-        with open(fname) as file:
-            lines = file.readlines()
+        lines = []
+        fname = "/".join([self.taskbase, self.env, self.desk, self.path_suffix])
 
-        # TODO: add a better parser cuz ' :' might not get parsed
-        value = lines[0].strip().partition(' : ')[-1]
-        self.taskid = value
-        return value
+        # Current task ID might not exist, and it is fine
+        if os.path.exists(fname):
+            with open(fname) as file:
+                lines = file.readlines()
+
+        if len(lines) > 0:
+            # TODO: add a better parser cuz ' :' might not get parsed
+            value = lines[0].strip().partition(' : ')[-1]
+            self.taskid = value
+            return value
+        return None
 
     def env_exist(self):
         dir = "/".join([self.taskbase, self.env])
@@ -341,7 +555,8 @@ class Gmux(Repo):
         if self.args.get(env, desk) is False:
             sys.exit(1)
 
-        if len(self.taskids) == 0:
+        global COMMAND
+        if len(self.taskids) == 0 and COMMAND != 'help':
             if (taskid := self.args.get_curr_taskID()) is None:
                 self.log.err("'%s': no current task ID", "CURR")
                 sys.exit(1)
@@ -372,25 +587,33 @@ class Gmux(Repo):
             repo.symlink(dst, taskid)
             units = unit.getall(taskid)
             branch_stored = units.get('branch')
-            branch_generated = branch.generate(units, self.settings['prefix'])
-
-            repo.branch_remove(branch_generated)
+            repo.branch_remove(branch_stored)
         return retcode
 
     def help(self):
         retcode = 1
-        for cmd in self.taskids: # these are commands not task IDs
-            print(f"show help for command {cmd}")
+        cmds = self.taskids # these are commands not task IDs
+        opts = {
+                'synop' : True,
+                'desc_short': True,
+                'desc_long': True,
+            }
+
+        if len(cmds) == 0:
+            for cmd in helpmsg:
+                print(cmd, "\t", helpmsg[cmd]['desc_short'])
             return 0
-        print("show list of all commands")
-        return retcode
 
-    def merge(self):
-        retcode = 1
-        return retcode
-
-    def revert(self):
-        retcode = 1
+        for cmd in cmds:
+            _cmd = helpmsg.get(cmd)
+            if _cmd is not None:
+                print(_cmd['synop'])
+                print("    ", _cmd['desc_short'])
+                print("    ", _cmd['desc_long'])
+                retcode = 0
+            else:
+                print(f"gmux: help: no such command '{cmd}'")
+                retcode = 1
         return retcode
 
     def show(self):
@@ -398,6 +621,9 @@ class Gmux(Repo):
         unit = Unit(self._getpath())
 
         for taskid in self.taskids:
+            if self.args.task_exist(taskid) is False:
+                self.log.err("'%s': no such task ID", taskid)
+                continue
             units = unit.get(taskid)
             for key, value in units.items():
                 print(f"{key} : {value}")
@@ -420,10 +646,11 @@ class Gmux(Repo):
             repo.symlink(dst, taskid)
             units = unit.getall(taskid)
             branch_stored = units.get('branch')
-            branch_generated = branch.generate(units, self.settings['prefix'])
+            branch_generated = branch.generate(units, self.settings['prefix'], self.settings['type'])
 
             repo.branch_update(branch_stored, branch_generated)
             repo.branch_switch(branch_generated)
+            repo.merge()
 
             if branch_stored != branch_generated:
                 unit.set({ 'branch' : branch_generated })
@@ -432,10 +659,10 @@ class Gmux(Repo):
 
     def rsync(self):
         retcode = 0
+        dst = self._getpath()
+        unit = Unit(dst)
+        branch = Branch(self.settings['branchpatt'])
         repo = Repo(self.settings, self.args.taskbase)
-
-        self.err("under development")
-        return 0
 
         # TODO: Execute the same for submodules if needed
         for taskid in self.taskids:
@@ -446,24 +673,41 @@ class Gmux(Repo):
             unit.make_dir(taskid)
             repo.symlink(dst, taskid)
             units = unit.getall(taskid)
-            branch_name = units.get('branch')
+            branch_generated = branch.generate(units, self.settings['prefix'], self.settings['type'])
 
-            repo.branch_switch(self.settings['branch'])
-            repo.branch_pull(self.settings['branch'])
+            if repo.has_uncommited_changes() == True:
+                continue
+            if repo.branch_switch_default() == False:
+                continue
+
+            repo.fetch()
+            repo.merge()
+            repo.branch_switch(branch_generated)
         return retcode
 
-parser = argparse.ArgumentParser(description="Git multiplexer")
-parser.add_argument("-e", "--env", help="environment name")
-parser.add_argument("-d", "--desk", help="desk name")
-parser.add_argument("-P", "--pgnbase", help="pgn directory base")
-parser.add_argument("-T", "--taskbase", help="task directory base")
-parser.add_argument("cmd", default=default_cmd, nargs='?', type=str, help="subcommand")
-parser.add_argument("taskids", type=str, nargs='*', help="task ID")
-args = parser.parse_args()
+    def issue(self):
+        print("manage MRs")
 
+
+def parse_args():
+    global COMMAND
+
+    parser = argparse.ArgumentParser(description="Git multiplexer")
+    parser.add_argument("-e", "--env", help="environment name")
+    parser.add_argument("-d", "--desk", help="desk name")
+    parser.add_argument("-P", "--pgnbase", help="pgn directory base")
+    parser.add_argument("-T", "--taskbase", help="task directory base")
+    parser.add_argument("cmd", default=default_cmd, nargs='?', type=str, help="subcommand")
+    parser.add_argument("taskids", type=str, nargs='*', help="task ID")
+    args = parser.parse_args()
+
+    # HOTFIX
+    COMMAND = args.cmd
+    return args
 
 def main():
     log = Log()
+    args = parse_args()
     gmux = Gmux(args.taskbase, args.env, args.desk, args.taskids)
     cmd = getattr(gmux, args.cmd, None)
 
@@ -471,6 +715,6 @@ def main():
         res = cmd()
     else:
         res = log.err(f"'{args.cmd}': no such command")
-    sys.exit(res)
+    return res
 
-main()
+sys.exit(main())

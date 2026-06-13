@@ -8,4 +8,6 @@
 
 ### Fixed
 
+- `gmux`: Refactor class Repo
+
 ### Deleted

@@ -1,14 +1,16 @@
 #!/bin/env python3
 
 import os
-import re
 import copy
 import sys
 import json
-import copy
 import pygit2
 import argparse
 from pygit2 import GIT_MERGE_ANALYSIS_FASTFORWARD, GIT_MERGE_ANALYSIS_NORMAL, GIT_MERGE_ANALYSIS_UP_TO_DATE
+
+# Exit status codes
+GMUX_SUCCESS = 0
+GMUX_FAILURE = 0
 
 
 # HOTFIX: cuz args.taskids is for help command and task IDs.
@@ -97,14 +99,6 @@ helpmsg = {
     },
 }
 
-def has_uncommited_changes(repo):
-    status = repo.status()
-    return len(status) > 0
-
-def fetch(repo, remote_name='origin'):
-    remote = repo.remotes[remote_name]
-    remote.fetch()
-
 def merge(repo, remote_name='origin', branch='master'):
     """
     Performs a git pull equivalent: fetches the remote and updates the local branch.
@@ -125,7 +119,7 @@ def merge(repo, remote_name='origin', branch='master'):
 
     # 3. Case 1: Already up to date
     if merge_result & GIT_MERGE_ANALYSIS_UP_TO_DATE:
-        print("Already up to date.")
+        #print("Already up to date.")
         return
 
     # 4. Case 2: Fast-forward possible
@@ -236,39 +230,30 @@ class Repo(Log):
                 submodule.update(init=True)
         return True
 
-    def symlink(self, dst, taskid):
+    def symlink(self, cfg, dst, taskid):
         dst = "/".join([dst, taskid])
-        for cfg in self.config['repos']:
-            repo_src = self.path + cfg['name']
-            repo_dst = "/".join([dst, cfg['name']])
-            if not os.path.exists(repo_src):
-                self.log.err("repo not cloned yet")
-            elif not os.path.islink(repo_dst):
-                os.symlink(repo_src, repo_dst)
+        repo_src = self.path + cfg['name']
+        repo_dst = "/".join([dst, cfg['name']])
+        if not os.path.exists(repo_src):
+            self.log.err("repo not cloned yet")
+        elif not os.path.islink(repo_dst):
+            os.symlink(repo_src, repo_dst)
 
-    def has_uncommited_changes(self):
-        status = False
-        for cfg in self.config['repos']:
-            repo = pygit2.Repository(self.path + cfg['name'])
-            if has_uncommited_changes(repo) == True:
-                status = True
-                print(f"repo '{cfg['name']}' has uncommited changes")
-        return status
+    def has_uncommited_changes(self, cfg):
+        repo = pygit2.Repository(self.path + cfg['name'])
+        status = repo.status()
+        return len(status) > 0
 
-    def fetch(self, remote_name="origin"):
-        for cfg in self.config['repos']:
-            repo = pygit2.Repository(self.path + cfg['name'])
-            if has_uncommited_changes(repo) == True:
-                print("ERROR:", cfg['name'], "has uncommited changes")
-                continue
-            self.log.info("fetching repo '%s'", cfg["name"])
-            fetch(repo, 'origin')
+    def fetch(self, cfg, remote_name="origin"):
+        repo = pygit2.Repository(self.path + cfg['name'])
+        self.log.info("fetching repo '%s'", cfg["name"])
+        remote = repo.remotes[remote_name]
+        remote.fetch()
         return True
 
-    def merge(self, remote_name="origin"):
-        for cfg in self.config['repos']:
-            repo = pygit2.Repository(self.path + cfg['name'])
-            merge(repo, 'origin', cfg['branch'])
+    def merge(self, cfg, remote_name="origin"):
+        repo = pygit2.Repository(self.path + cfg['name'])
+        merge(repo, 'origin', cfg['branch'])
         return True
 
     # Get default branch name from remote
@@ -280,69 +265,74 @@ class Repo(Log):
         return None
 
     # TODO: find a way to join this function and branch_switch()
-    def branch_switch_default(self):
+    def branch_switch_default(self, cfg):
         status = True
+        reponame = cfg['name']
+        branch = cfg['branch']
+
         # TODO: switch branch in submodules as well
         # TODO: let not nonexisting brach to break the loop
-        for cfg in self.config['repos']:
-            try:
-                branch_name = cfg["branch"]
-                repo = pygit2.Repository(self.path + cfg['name'])
+        try:
+            branch_name = branch
+            repo = pygit2.Repository(self.path + reponame)
 
-                # TODO: check that repo has no uncommited changes
-                if branch_name not in repo.branches:
-                    self.log.err("'%s': no such default branch in repo '%s'", cfg["branch"], cfg["name"])
-                elif branch_name == repo.head.shorthand:
-                    self.log.info("already on default branch '%s'", cfg["name"])
-                else:
-                    repo.checkout(repo.branches[branch_name])
-            except pygit2.GitError as e:
-                self.log.err("git error: %s", cfg['name'])
-                status = False
+            # TODO: check that repo has no uncommited changes
+            if branch_name not in repo.branches:
+                self.log.err("'%s': no such default branch in repo '%s'", branch_name, reponame)
+            elif branch_name == repo.head.shorthand:
+                self.log.info("already on default branch '%s'", reponame)
+            else:
+                repo.checkout(repo.branches[branch_name])
+        except pygit2.GitError as e:
+            self.log.err("git error: %s", reponame)
+            status = False
         return status
 
-    def branch_switch(self, branch_name):
+    def branch_switch(self, cfg, branch_name):
+        reponame = cfg['name']
+        branch = cfg['branch']
         # TODO: switch branch in submodules as well
         # TODO: let not nonexisting brach to break the loop
-        for cfg in self.config['repos']:
-            try:
-                repo = pygit2.Repository(self.path + cfg['name'])
+        try:
+            repo = pygit2.Repository(self.path + reponame)
 
-                # TODO: check that repo has no uncommited changes
-                if cfg["branch"] not in repo.branches:
-                    self.log.err("'%s': no such base branch in repo '%s'", cfg["branch"], cfg["name"])
-                elif branch_name not in repo.branches:
-                    self.log.err("'%s': no such task branch in repo '%s'", cfg["branch"], cfg["name"])
-                elif cfg["name"] == repo.head.shorthand:
-                    self.log.info("already on base branch '%s'", cfg["name"])
-                else:
-                    repo.checkout(repo.branches[branch_name])
-            except pygit2.GitError as e:
-                self.err("git error")
+            # TODO: check that repo has no uncommited changes
+            if cfg["branch"] not in repo.branches:
+                self.log.err("'%s': no such base branch in repo '%s'", branch, reponame)
+            elif branch_name not in repo.branches:
+                self.log.err("'%s': no such task branch in repo '%s'", branch, reponame)
+            elif cfg["name"] == repo.head.shorthand:
+                self.log.info("already on base branch '%s'", reponame)
+            else:
+                repo.checkout(repo.branches[branch_name])
+        except pygit2.GitError as e:
+            self.err("git error")
         return True
 
-    def branch_remove(self, branch_name):
-        for cfg in self.config['repos']:
-            repo = pygit2.Repository(self.path + cfg['name'])
-            if branch_name in repo.branches:
-                if self._has_uncommited_changes(cfg['name']) == False:
-                    repo.checkout(repo.branches[cfg['branch']])
-                    repo.branches.delete(branch_name)
-                else:
-                    self.log.err("%s: repo has uncommited changes", cfg['name'])
+    def branch_remove(self, cfg, branch_name):
+        repo = pygit2.Repository(self.path + cfg['name'])
+        if branch_name in repo.branches:
+            if self._has_uncommited_changes(cfg['name']) == False:
+                repo.checkout(repo.branches[cfg['branch']])
+                repo.branches.delete(branch_name)
+            else:
+                self.log.err("%s: repo has uncommited changes", cfg['name'])
 
 
-    def branch_update(self, oldbranch, newbranch):
-        for cfg in self.config['repos']:
-            if oldbranch == newbranch:
-                if self._has_uncommited_changes(cfg['name']) == True:
-                    self.log.err(f"{cfg['name']}: has uncommited changes")
-                elif self._branch_exist(cfg['name'], oldbranch) == False:
-                    self._branch_create(cfg['name'], oldbranch, cfg['branch'])
-            elif oldbranch is not None:
-                self._branch_rename(cfg['name'], oldbranch, newbranch)
-            elif self._branch_exist(cfg['name'], newbranch) == False:
-                self._branch_create(cfg['name'], newbranch, cfg['branch'])
+    def branch_update(self, cfg, oldbranch, newbranch):
+        reponame = cfg['name']
+        branch = cfg['branch']
+
+        if oldbranch == newbranch:
+            if self._has_uncommited_changes(reponame) == True:
+                self.log.err(f"{reponame}: has uncommited changes")
+                return False
+            elif self._branch_exist(reponame, oldbranch) == False:
+                self._branch_create(reponame, oldbranch, branch)
+        elif oldbranch is not None:
+            self._branch_rename(reponame, oldbranch, newbranch)
+        elif self._branch_exist(reponame, newbranch) == False:
+            self._branch_create(reponame, newbranch, branch)
 
     def _has_uncommited_changes(self, reponame):
         repo = pygit2.Repository(self.path + reponame)
@@ -453,7 +443,6 @@ class Unit:
 
     def set(self, units):
         for key, val in units.items():
-            print("-- key, val", key, val)
             self.unitpgn[key] = val
 
     def save(self, taskid):
@@ -572,10 +561,9 @@ class Gmux(Repo):
         return retcode
 
     def remove(self):
-        retcode = 0
+        retcode = True
         dst = self._getpath()
         unit = Unit(dst)
-        branch = Branch(self.settings['branchpatt'])
         repo = Repo(self.settings, self.args.taskbase)
 
         # TODO: Execute the same for submodules if needed
@@ -584,11 +572,17 @@ class Gmux(Repo):
                 self.log.err("'%s': no such task ID", taskid)
                 continue
 
-            repo.symlink(dst, taskid)
             units = unit.getall(taskid)
             branch_stored = units.get('branch')
-            repo.branch_remove(branch_stored)
-        return retcode
+
+            for cfg in self.settings['repos']:
+                if repo.symlink(cfg, dst, taskid) is False:
+                    retcode = False
+                    self.log.err("'%s': could not create symlink", cfg['name'])
+                elif repo.branch_remove(cfg, branch_stored) == False:
+                    retcode = False
+                    self.log.err("'%s': could not remove task branch", cfg['name'])
+        return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
     def help(self):
         retcode = 1
@@ -630,7 +624,7 @@ class Gmux(Repo):
         return retcode
 
     def sync(self):
-        retcode = 0
+        retcode = True
         dst = self._getpath()
         unit = Unit(dst)
         branch = Branch(self.settings['branchpatt'])
@@ -643,22 +637,35 @@ class Gmux(Repo):
                 continue
 
             unit.make_dir(taskid)
-            repo.symlink(dst, taskid)
             units = unit.getall(taskid)
             branch_stored = units.get('branch')
             branch_generated = branch.generate(units, self.settings['prefix'], self.settings['type'])
 
-            repo.branch_update(branch_stored, branch_generated)
-            repo.branch_switch(branch_generated)
-            repo.merge()
+            for cfg in self.settings['repos']:
+                if repo.symlink(cfg, dst, taskid) is False:
+                    retcode = False
+                    self.log.err("'%s': could not create symlink", cfg['name'])
+                elif repo.has_uncommited_changes(cfg) == True:
+                    retcode = False
+                    self.log.err("'%s': repo has uncommited changes", cfg['name'])
+                elif repo.branch_update(cfg, branch_stored, branch_generated) is False:
+                    self.log.err("'%s': could not update branch", "<REPO>")
+                    retcode = False
+                elif repo.branch_switch(cfg, branch_generated) == False:
+                    self.log.err("'%s': could not switch to task branch", cfg['name'])
+                    retcode = False
+                elif repo.merge(cfg) == False:
+                    self.log.err("'%s': could not merge branch", cfg['name'])
+                    retcode = False
 
-            if branch_stored != branch_generated:
+            if retcode == True and branch_stored != branch_generated:
                 unit.set({ 'branch' : branch_generated })
                 unit.save(taskid)
-        return retcode
+
+        return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
     def rsync(self):
-        retcode = 0
+        retcode = True
         dst = self._getpath()
         unit = Unit(dst)
         branch = Branch(self.settings['branchpatt'])
@@ -671,19 +678,29 @@ class Gmux(Repo):
                 continue
 
             unit.make_dir(taskid)
-            repo.symlink(dst, taskid)
             units = unit.getall(taskid)
             branch_generated = branch.generate(units, self.settings['prefix'], self.settings['type'])
 
-            if repo.has_uncommited_changes() == True:
-                continue
-            if repo.branch_switch_default() == False:
-                continue
-
-            repo.fetch()
-            repo.merge()
-            repo.branch_switch(branch_generated)
-        return retcode
+            for cfg in self.settings['repos']:
+                if repo.symlink(cfg, dst, taskid) is False:
+                    retcode = False
+                    self.log.err("'%s': could not create symlink", cfg['name'])
+                elif repo.has_uncommited_changes(cfg) == True:
+                    retcode = False
+                    self.log.err("'%s': repo has uncommited changes", cfg['name'])
+                elif repo.branch_switch_default(cfg) is False:
+                    self.log.err("'%s': could not switch to default branch", cfg['name'])
+                    retcode = False
+                elif repo.fetch(cfg) == False:
+                    self.log.err("'%s': could not fetch changes", cfg['name'])
+                    retcode = False
+                elif repo.merge(cfg) == False:
+                    self.log.err("'%s': could not merge to default branch", cfg['name'])
+                    retcode = False
+                elif repo.branch_switch(cfg, branch_generated) == False:
+                    self.log.err("'%s': could not switch to task branch", cfg['name'])
+                    retcode = False
+        return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
     def issue(self):
         print("manage MRs")

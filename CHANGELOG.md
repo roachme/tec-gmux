@@ -9,5 +9,6 @@
 ### Fixed
 
 - `gmux`: Refactor class Repo
+- `gmux`: Minor fixes
 
 ### Deleted

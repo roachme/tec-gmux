@@ -253,6 +253,7 @@ class Repo(Log):
 
     def merge(self, cfg, remote_name="origin"):
         repo = pygit2.Repository(self.path + cfg['name'])
+        self.log.info("'%s': merge repo", cfg['name'])
         merge(repo, 'origin', cfg['branch'])
         return True
 
@@ -569,6 +570,7 @@ class Gmux(Repo):
         # TODO: Execute the same for submodules if needed
         for taskid in self.taskids:
             if self.args.task_exist(taskid) is False:
+                retcode = False
                 self.log.err("'%s': no such task ID", taskid)
                 continue
 
@@ -611,17 +613,19 @@ class Gmux(Repo):
         return retcode
 
     def show(self):
-        retcode = 0
+        retcode = True
         unit = Unit(self._getpath())
 
         for taskid in self.taskids:
             if self.args.task_exist(taskid) is False:
+                retcode = False
                 self.log.err("'%s': no such task ID", taskid)
                 continue
+
             units = unit.get(taskid)
             for key, value in units.items():
                 print(f"{key} : {value}")
-        return retcode
+        return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
     def sync(self):
         retcode = True
@@ -633,6 +637,7 @@ class Gmux(Repo):
         # TODO: Execute the same for submodules if needed
         for taskid in self.taskids:
             if self.args.task_exist(taskid) is False:
+                retcode = False
                 self.log.err("'%s': no such task ID", taskid)
                 continue
 
@@ -674,6 +679,7 @@ class Gmux(Repo):
         # TODO: Execute the same for submodules if needed
         for taskid in self.taskids:
             if self.args.task_exist(taskid) is False:
+                retcode = False
                 self.log.err("'%s': no such task ID", taskid)
                 continue
 

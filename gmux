@@ -11,7 +11,7 @@ from pygit2 import GIT_MERGE_ANALYSIS_FASTFORWARD, GIT_MERGE_ANALYSIS_NORMAL, GI
 
 # Exit status codes
 GMUX_SUCCESS = 0
-GMUX_FAILURE = 0
+GMUX_FAILURE = 1
 
 
 # HOTFIX: cuz args.taskids is for help command and task IDs.

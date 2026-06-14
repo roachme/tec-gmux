@@ -3,6 +3,7 @@
 ### Added
 
 - `gmux`: Add help message for gmux
+- `gmux`: Add new command `update`
 
 ### Changed
 

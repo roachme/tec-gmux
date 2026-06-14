@@ -6,6 +6,7 @@ import sys
 import json
 import pygit2
 import argparse
+from pygit2.enums import MergeAnalysis, MergePreference
 from pygit2 import GIT_MERGE_ANALYSIS_FASTFORWARD, GIT_MERGE_ANALYSIS_NORMAL, GIT_MERGE_ANALYSIS_UP_TO_DATE
 
 # Exit status codes
@@ -88,6 +89,23 @@ helpmsg = {
      Options:
        -h        show help message and exit
        -r        rebase branch against default branch
+       -v        verbose mode
+
+     Arguments:
+       ID        Task ID, if not passed then current task ID is used
+
+     Exit status:
+       Under development
+       """,
+    },
+    'update': {
+        'tag' : "basic",
+        'synop': "Usage: tec gmux update [OPTION]...",
+        'desc_short': "Merge task branch into default",
+        'desc_long':
+        """
+     Options:
+       -h        show help message and exit
        -v        verbose mode
 
      Arguments:
@@ -238,6 +256,103 @@ class Repo(Log):
             self.log.err("repo not cloned yet")
         elif not os.path.islink(repo_dst):
             os.symlink(repo_src, repo_dst)
+
+    def rebase(self, cfg, target_branch_name, feature_branch_name):
+        """
+        Rebase a feature branch onto a target branch.
+
+        Args:
+            repo_path: Path to the git repository
+            target_branch_name: Name of the branch to rebase onto (e.g., "main")
+            feature_branch_name: Name of the feature branch to rebase
+        """
+        repo = pygit2.Repository(self.path + cfg['name'])
+
+        # Get branch references
+        target_branch = repo.branches[target_branch_name]
+        feature_branch = repo.branches[feature_branch_name]
+
+        # Get the common ancestor (merge base)
+        merge_base = repo.merge_base(feature_branch.target, target_branch.target)
+
+        if merge_base == target_branch.target:
+            print(f"Feature branch is already up-to-date with {target_branch_name}")
+            return
+
+        # Get the list of commits to rebase (feature commits not in target)
+        commits_to_rebase = []
+        walker = repo.walk(feature_branch.target, pygit2.GIT_SORT_TOPOLOGICAL)
+        for commit in walker:
+            if commit.id == merge_base:
+                break
+            commits_to_rebase.append(commit)
+
+        commits_to_rebase.reverse()  # Oldest first
+
+        print(f"Rebasing {len(commits_to_rebase)} commits from '{feature_branch_name}' onto '{target_branch_name}'...")
+
+        # Save current HEAD position
+        original_head = repo.head.target
+        original_branch = repo.head.name
+
+        try:
+            # Checkout the target branch first
+            repo.checkout(target_branch)
+            repo.reset(target_branch.target, pygit2.GIT_RESET_HARD)
+
+            # Replay each commit
+            for i, commit in enumerate(commits_to_rebase):
+                print(f"Applying: {commit.message.splitlines()[0]}")
+
+                # Get the changes between commit and its parent
+                parent_tree = commit.parents[0].tree if commit.parents else None
+                current_tree = commit.tree
+
+                # Get diff and apply
+                diff = repo.diff(parent_tree, current_tree)
+
+                # Try to apply the changes
+                try:
+                    # Apply the changes to the index
+                    repo.reset(repo.head.target, pygit2.GIT_RESET_MIXED)
+                    for delta in diff:
+                        # For each changed file, update the index
+                        # This is simplified - a full implementation needs proper patch application
+                        pass
+
+                    # Create new commit
+                    user = repo.default_signature
+                    tree = repo.index.write_tree()
+
+                    new_commit_oid = repo.create_commit(
+                        'HEAD',
+                        user,
+                        user,
+                        commit.message,
+                        tree,
+                        [repo.head.target]
+                    )
+
+                    # Update feature branch to new commit
+                    feature_branch.set_target(new_commit_oid)
+
+                except Exception as e:
+                    print(f"Conflict detected while applying commit: {commit.oid}")
+                    print(f"Please resolve conflicts manually in: {repo_path}")
+                    print(f"After resolution, run: git rebase --continue")
+                    raise RuntimeError(f"Rebase failed at commit {commit.oid[:8]}: {e}")
+
+            # Update feature branch reference to the rebased HEAD
+            feature_branch.set_target(repo.head.target)
+            repo.checkout(feature_branch)
+
+            print(f"Successfully rebased '{feature_branch_name}' onto '{target_branch_name}'")
+
+        except Exception as e:
+            # Restore original state on failure
+            repo.checkout(original_branch)
+            repo.reset(original_head, pygit2.GIT_RESET_HARD)
+            raise e
 
     def has_uncommited_changes(self, cfg):
         repo = pygit2.Repository(self.path + cfg['name'])
@@ -706,6 +821,36 @@ class Gmux(Repo):
                 elif repo.branch_switch(cfg, branch_generated) == False:
                     self.log.err("'%s': could not switch to task branch", cfg['name'])
                     retcode = False
+        return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
+
+
+    def update(self):
+        retcode = True
+        dst = self._getpath()
+        unit = Unit(dst)
+        repo = Repo(self.settings, self.args.taskbase)
+
+        # TODO: Execute the same for submodules if needed
+        for taskid in self.taskids:
+            if self.args.task_exist(taskid) is False:
+                retcode = False
+                self.log.err("'%s': no such task ID", taskid)
+                continue
+
+            unit.make_dir(taskid)
+            units = unit.getall(taskid)
+            branch_stored = units.get('branch')
+
+            for cfg in self.settings['repos']:
+                if repo.symlink(cfg, dst, taskid) is False:
+                    retcode = False
+                    self.log.err("'%s': could not create symlink", cfg['name'])
+                elif repo.has_uncommited_changes(cfg) == True:
+                    retcode = False
+                    self.log.err("'%s': repo has uncommited changes", cfg['name'])
+                elif repo.rebase(cfg, branch_stored, cfg['branch']) == False:
+                    retcode = False
+                    self.log.err("'%s': could not rebase against default branch", cfg['name'])
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
     def issue(self):

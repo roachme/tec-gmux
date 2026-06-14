@@ -851,6 +851,9 @@ class Gmux(Repo):
                 elif repo.rebase(cfg, branch_stored, cfg['branch']) == False:
                     retcode = False
                     self.log.err("'%s': could not rebase against default branch", cfg['name'])
+                elif repo.branch_switch(cfg, cfg['branch']) == False:
+                    self.log.err("'%s': could not switch to task branch", cfg['name'])
+                    retcode = False
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
     def issue(self):

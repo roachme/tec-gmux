@@ -14,10 +14,15 @@ GMUX_SUCCESS = 0
 GMUX_FAILURE = 1
 
 
+
+
 # HOTFIX: cuz args.taskids is for help command and task IDs.
 # Gmux() sets current task ID by default, but it is wrong value when command
 # 'help' is invoked.
 COMMAND = None
+
+# TODO: Use a separate class for this kinda global varibales
+ISDEBUG = False
 
 """
 TODO:
@@ -196,6 +201,10 @@ class Log:
         return 0
 
     def debug(self, fmt, *arg):
+        global ISDEBUG
+
+        if ISDEBUG == False:
+            return 0
         print(f"{pgname}: " + fmt % arg)
         return 0
 
@@ -368,7 +377,7 @@ class Repo(Log):
 
     def merge(self, cfg, remote_name="origin"):
         repo = pygit2.Repository(self.path + cfg['name'])
-        self.log.info("'%s': merge repo", cfg['name'])
+        self.log.debug("'%s': merge repo", cfg['name'])
         merge(repo, 'origin', cfg['branch'])
         return True
 

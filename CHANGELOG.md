@@ -13,5 +13,6 @@
 - `gmux`: Minor fixes
 - `gmux`: Fix exit code
 - `gmux`: Switch to default branch for command `update`
+- `gmux`: Fix fresh repo clone
 
 ### Deleted

@@ -474,10 +474,30 @@ class Repo(Log):
                 return True
         return False
 
+    # Create local branch from remote branch.
+    # It is usefull when cloning new repo
+    def __create_branch_from_remote(self, reponame, branch_to_create):
+        repo = pygit2.Repository(self.path + reponame)
+        remote_ref_name = f"origin/{branch_to_create}"
+
+        if branch_to_create in repo.branches.local:
+            # Branch already exits, do nothing
+            return True
+        elif remote_ref_name in repo.branches.remote:
+            remote_ref = repo.branches.remote[remote_ref_name]
+            commit = repo.get(remote_ref.target)
+            repo.branches.create(branch_to_create, commit)
+            return True
+        # Branch not found, return False
+        return False
+
     def _branch_create(self, reponame, new_branch_name, src_branch_name):
         repo = pygit2.Repository(self.path + reponame)
         for cfg in self.config['repos']:
             if cfg['name'] == reponame:
+                if self.__create_branch_from_remote(reponame, src_branch_name) is False:
+                    print(f"'{src_branch_name}': could not find it neither locally nor remotely in {reponame}")
+                    return False
                 src_branch = repo.branches[src_branch_name]
                 new_branch = repo.branches.local.create(new_branch_name, repo[src_branch.target])
                 return True

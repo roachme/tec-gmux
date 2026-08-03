@@ -130,11 +130,20 @@ def merge(repo, remote_name='origin', branch='master'):
         repo: pygit2.Repository instance
         remote_name: Name of the remote (e.g., 'origin')
         branch: Name of the branch to pull (e.g., 'master')
+
+    Returns:
+        True if the local branch is up to date, fast-forwarded, or merged
+        cleanly; False if the remote branch is missing or a conflict needs
+        manual resolution.
     """
 
     # 1. Get the remote tracking branch reference
     remote_branch_name = f'refs/remotes/{remote_name}/{branch}'
-    remote_commit_id = repo.lookup_reference(remote_branch_name).target
+    try:
+        remote_commit_id = repo.lookup_reference(remote_branch_name).target
+    except KeyError:
+        print(f"'{remote_branch_name}': no such remote branch")
+        return False
     remote_commit = repo.get(remote_commit_id)
 
     # 2. Analyze if and how we can merge
@@ -143,7 +152,7 @@ def merge(repo, remote_name='origin', branch='master'):
     # 3. Case 1: Already up to date
     if merge_result & GIT_MERGE_ANALYSIS_UP_TO_DATE:
         #print("Already up to date.")
-        return
+        return True
 
     # 4. Case 2: Fast-forward possible
     elif merge_result & GIT_MERGE_ANALYSIS_FASTFORWARD:
@@ -154,6 +163,7 @@ def merge(repo, remote_name='origin', branch='master'):
         branch_ref.set_target(remote_commit_id)
         repo.head.set_target(remote_commit_id)
         #print(f"Updated to {remote_commit_id.hex}")
+        return True
 
     # 5. Case 3: True merge required
     elif merge_result & GIT_MERGE_ANALYSIS_NORMAL:
@@ -167,7 +177,7 @@ def merge(repo, remote_name='origin', branch='master'):
             # You can iterate through conflicts if needed:
             # for conflict in repo.index.conflicts:
             #     print(f"Conflict in: {conflict[0].path}")
-            return
+            return False
 
         # No conflicts: commit the merge
         user = repo.default_signature
@@ -183,6 +193,7 @@ def merge(repo, remote_name='origin', branch='master'):
         # Clean up merge state
         repo.state_cleanup()
         print("Merge completed successfully.")
+        return True
 
     else:
         raise RuntimeError("Unknown merge analysis result")
@@ -263,105 +274,125 @@ class Repo(Log):
         repo_dst = "/".join([dst, cfg['name']])
         if not os.path.exists(repo_src):
             self.log.err("repo not cloned yet")
+            return False
         elif not os.path.islink(repo_dst):
             os.symlink(repo_src, repo_dst)
+        return True
 
     def rebase(self, cfg, target_branch_name, feature_branch_name):
         """
         Rebase a feature branch onto a target branch.
 
         Args:
-            repo_path: Path to the git repository
+            cfg: repo config entry (used to locate the repo on disk)
             target_branch_name: Name of the branch to rebase onto (e.g., "main")
             feature_branch_name: Name of the feature branch to rebase
-        """
-        repo = pygit2.Repository(self.path + cfg['name'])
 
-        # Get branch references
-        target_branch = repo.branches[target_branch_name]
-        feature_branch = repo.branches[feature_branch_name]
+        Returns:
+            True on success (including the no-op case where the feature
+            branch is already up to date); False on error or conflict,
+            in which case the repo is left on its original branch/commit.
+        """
+        reponame = cfg['name']
+        repo = pygit2.Repository(self.path + reponame)
+
+        target_branch = repo.branches.get(target_branch_name)
+        feature_branch = repo.branches.get(feature_branch_name)
+        if target_branch is None:
+            self.log.err("'%s': no such branch '%s'", reponame, target_branch_name)
+            return False
+        if feature_branch is None:
+            self.log.err("'%s': no such branch '%s'", reponame, feature_branch_name)
+            return False
 
         # Get the common ancestor (merge base)
         merge_base = repo.merge_base(feature_branch.target, target_branch.target)
+        if merge_base is None:
+            self.log.err("'%s': no common ancestor between '%s' and '%s'",
+                          reponame, feature_branch_name, target_branch_name)
+            return False
 
         if merge_base == target_branch.target:
-            print(f"Feature branch is already up-to-date with {target_branch_name}")
-            return
+            self.log.debug("'%s': '%s' is already up-to-date with '%s'",
+                            reponame, feature_branch_name, target_branch_name)
+            return True
 
-        # Get the list of commits to rebase (feature commits not in target)
-        commits_to_rebase = []
-        walker = repo.walk(feature_branch.target, pygit2.GIT_SORT_TOPOLOGICAL)
-        for commit in walker:
+        # Get the list of commits to replay (feature commits not in target)
+        commits_to_replay = []
+        for commit in repo.walk(feature_branch.target, pygit2.GIT_SORT_TOPOLOGICAL):
             if commit.id == merge_base:
                 break
-            commits_to_rebase.append(commit)
+            commits_to_replay.append(commit)
+        commits_to_replay.reverse()  # Oldest first
 
-        commits_to_rebase.reverse()  # Oldest first
+        self.log.debug("'%s': rebasing %d commit(s) from '%s' onto '%s'",
+                        reponame, len(commits_to_replay), feature_branch_name, target_branch_name)
 
-        print(f"Rebasing {len(commits_to_rebase)} commits from '{feature_branch_name}' onto '{target_branch_name}'...")
+        # Save current HEAD so we can restore it if anything goes wrong
+        original_ref = repo.head.name
 
-        # Save current HEAD position
-        original_head = repo.head.target
-        original_branch = repo.head.name
+        # Move to a detached HEAD at the target branch's tip so replayed
+        # commits don't touch target_branch's ref until we're done.
+        repo.set_head(target_branch.target)
+        repo.reset(target_branch.target, pygit2.GIT_RESET_HARD)
+        new_head = target_branch.target
 
-        try:
-            # Checkout the target branch first
-            repo.checkout(target_branch)
-            repo.reset(target_branch.target, pygit2.GIT_RESET_HARD)
+        for commit in commits_to_replay:
+            try:
+                repo.cherrypick(commit.id)
+            except pygit2.GitError as e:
+                self.log.err("'%s': git error while replaying commit '%s': %s",
+                              reponame, str(commit.id)[:8], e)
+                repo.state_cleanup()
+                repo.checkout(original_ref, strategy=pygit2.GIT_CHECKOUT_FORCE)
+                return False
 
-            # Replay each commit
-            for i, commit in enumerate(commits_to_rebase):
-                print(f"Applying: {commit.message.splitlines()[0]}")
+            if repo.index.conflicts:
+                self.log.err("'%s': conflict while replaying commit '%s'",
+                              reponame, str(commit.id)[:8])
+                repo.state_cleanup()
+                repo.checkout(original_ref, strategy=pygit2.GIT_CHECKOUT_FORCE)
+                return False
 
-                # Get the changes between commit and its parent
-                parent_tree = commit.parents[0].tree if commit.parents else None
-                current_tree = commit.tree
+            new_head = repo.create_commit(
+                'HEAD',
+                commit.author,
+                repo.default_signature,
+                commit.message,
+                repo.index.write_tree(),
+                [new_head],
+            )
+            repo.state_cleanup()
 
-                # Get diff and apply
-                diff = repo.diff(parent_tree, current_tree)
+        feature_branch.set_target(new_head)
+        repo.checkout(feature_branch, strategy=pygit2.GIT_CHECKOUT_FORCE)
+        self.log.debug("'%s': successfully rebased '%s' onto '%s'",
+                        reponame, feature_branch_name, target_branch_name)
+        return True
 
-                # Try to apply the changes
-                try:
-                    # Apply the changes to the index
-                    repo.reset(repo.head.target, pygit2.GIT_RESET_MIXED)
-                    for delta in diff:
-                        # For each changed file, update the index
-                        # This is simplified - a full implementation needs proper patch application
-                        pass
+    # Fast-forward cfg['branch'] (the default branch) to from_branch_name's
+    # tip. Meant to be called right after a successful rebase(), where the
+    # default branch is guaranteed to be an ancestor of the rebased branch.
+    def branch_fastforward(self, cfg, from_branch_name):
+        reponame = cfg['name']
+        dst_name = cfg['branch']
+        repo = pygit2.Repository(self.path + reponame)
 
-                    # Create new commit
-                    user = repo.default_signature
-                    tree = repo.index.write_tree()
+        dst_branch = repo.branches.get(dst_name)
+        src_branch = repo.branches.get(from_branch_name)
+        if dst_branch is None or src_branch is None:
+            self.log.err("'%s': missing branch while fast-forwarding", reponame)
+            return False
 
-                    new_commit_oid = repo.create_commit(
-                        'HEAD',
-                        user,
-                        user,
-                        commit.message,
-                        tree,
-                        [repo.head.target]
-                    )
+        if dst_branch.target == src_branch.target:
+            return True
+        if not repo.descendant_of(src_branch.target, dst_branch.target):
+            self.log.err("'%s': '%s' is not a fast-forward of '%s'",
+                          reponame, from_branch_name, dst_name)
+            return False
 
-                    # Update feature branch to new commit
-                    feature_branch.set_target(new_commit_oid)
-
-                except Exception as e:
-                    print(f"Conflict detected while applying commit: {commit.oid}")
-                    print(f"Please resolve conflicts manually in: {repo_path}")
-                    print(f"After resolution, run: git rebase --continue")
-                    raise RuntimeError(f"Rebase failed at commit {commit.oid[:8]}: {e}")
-
-            # Update feature branch reference to the rebased HEAD
-            feature_branch.set_target(repo.head.target)
-            repo.checkout(feature_branch)
-
-            print(f"Successfully rebased '{feature_branch_name}' onto '{target_branch_name}'")
-
-        except Exception as e:
-            # Restore original state on failure
-            repo.checkout(original_branch)
-            repo.reset(original_head, pygit2.GIT_RESET_HARD)
-            raise e
+        dst_branch.set_target(src_branch.target)
+        return True
 
     def has_uncommited_changes(self, cfg):
         repo = pygit2.Repository(self.path + cfg['name'])
@@ -371,15 +402,18 @@ class Repo(Log):
     def fetch(self, cfg, remote_name="origin"):
         repo = pygit2.Repository(self.path + cfg['name'])
         self.log.info("fetching repo '%s'", cfg["name"])
-        remote = repo.remotes[remote_name]
-        remote.fetch()
+        try:
+            remote = repo.remotes[remote_name]
+            remote.fetch()
+        except (KeyError, pygit2.GitError) as e:
+            self.log.err("'%s': could not fetch from '%s': %s", cfg['name'], remote_name, e)
+            return False
         return True
 
     def merge(self, cfg, remote_name="origin"):
         repo = pygit2.Repository(self.path + cfg['name'])
         self.log.debug("'%s': merge repo", cfg['name'])
-        merge(repo, 'origin', cfg['branch'])
-        return True
+        return merge(repo, remote_name, cfg['branch'])
 
     # Get default branch name from remote
     def branch_get_default(self, repo):
@@ -404,8 +438,9 @@ class Repo(Log):
             # TODO: check that repo has no uncommited changes
             if branch_name not in repo.branches:
                 self.log.err("'%s': no such default branch in repo '%s'", branch_name, reponame)
+                status = False
             elif branch_name == repo.head.shorthand:
-                self.log.info("already on default branch '%s'", reponame)
+                self.log.info("'%s': already on default branch '%s'", reponame, branch_name)
             else:
                 repo.checkout(repo.branches[branch_name])
         except pygit2.GitError as e:
@@ -414,6 +449,7 @@ class Repo(Log):
         return status
 
     def branch_switch(self, cfg, branch_name):
+        status = True
         reponame = cfg['name']
         branch = cfg['branch']
         # TODO: switch branch in submodules as well
@@ -424,24 +460,36 @@ class Repo(Log):
             # TODO: check that repo has no uncommited changes
             if cfg["branch"] not in repo.branches:
                 self.log.err("'%s': no such base branch in repo '%s'", branch, reponame)
+                status = False
             elif branch_name not in repo.branches:
-                self.log.err("'%s': no such task branch in repo '%s'", branch, reponame)
-            elif cfg["name"] == repo.head.shorthand:
-                self.log.info("already on base branch '%s'", reponame)
+                self.log.err("'%s': no such task branch in repo '%s'", branch_name, reponame)
+                status = False
+            elif branch_name == repo.head.shorthand:
+                self.log.debug("'%s': already on branch '%s'", reponame, branch_name)
             else:
                 repo.checkout(repo.branches[branch_name])
         except pygit2.GitError as e:
-            self.err("git error")
-        return True
+            self.log.err("'%s': git error: %s", reponame, e)
+            status = False
+        return status
 
     def branch_remove(self, cfg, branch_name):
+        status = True
         repo = pygit2.Repository(self.path + cfg['name'])
+        if branch_name is None:
+            self.log.err("'%s': no task branch stored yet, nothing to remove", cfg['name'])
+            return False
         if branch_name in repo.branches:
             if self._has_uncommited_changes(cfg['name']) == False:
                 repo.checkout(repo.branches[cfg['branch']])
                 repo.branches.delete(branch_name)
             else:
                 self.log.err("%s: repo has uncommited changes", cfg['name'])
+                status = False
+        else:
+            self.log.err("'%s': no such branch in repo '%s'", branch_name, cfg['name'])
+            status = False
+        return status
 
 
     def branch_update(self, cfg, oldbranch, newbranch):
@@ -453,11 +501,13 @@ class Repo(Log):
                 self.log.err(f"{reponame}: has uncommited changes")
                 return False
             elif self._branch_exist(reponame, oldbranch) == False:
-                self._branch_create(reponame, oldbranch, branch)
+                return self._branch_create(reponame, oldbranch, branch)
+            return True
         elif oldbranch is not None:
-            self._branch_rename(reponame, oldbranch, newbranch)
+            return self._branch_rename(reponame, oldbranch, newbranch)
         elif self._branch_exist(reponame, newbranch) == False:
-            self._branch_create(reponame, newbranch, branch)
+            return self._branch_create(reponame, newbranch, branch)
+        return True
 
     def _has_uncommited_changes(self, reponame):
         repo = pygit2.Repository(self.path + reponame)
@@ -541,11 +591,10 @@ class Config(Log):
         return None
 
     def get(self, env):
-        cfg = {}
-        for k, v in self.config.items():
-            if k == env:
-                cfg = v
-        return self._get_defaults(cfg)
+        if env not in self.config:
+            self.err("'%s': no gmux config for this env", env)
+            sys.exit(1)
+        return self._get_defaults(self.config[env])
 
 
 class Unit:
@@ -870,6 +919,11 @@ class Gmux(Repo):
             units = unit.getall(taskid)
             branch_stored = units.get('branch')
 
+            if branch_stored is None:
+                retcode = False
+                self.log.err("'%s': no task branch stored yet, run 'sync' first", taskid)
+                continue
+
             for cfg in self.settings['repos']:
                 if repo.symlink(cfg, dst, taskid) is False:
                     retcode = False
@@ -877,11 +931,14 @@ class Gmux(Repo):
                 elif repo.has_uncommited_changes(cfg) == True:
                     retcode = False
                     self.log.err("'%s': repo has uncommited changes", cfg['name'])
-                elif repo.rebase(cfg, branch_stored, cfg['branch']) == False:
+                elif repo.rebase(cfg, cfg['branch'], branch_stored) == False:
                     retcode = False
                     self.log.err("'%s': could not rebase against default branch", cfg['name'])
+                elif repo.branch_fastforward(cfg, branch_stored) == False:
+                    retcode = False
+                    self.log.err("'%s': could not merge task branch into default", cfg['name'])
                 elif repo.branch_switch(cfg, cfg['branch']) == False:
-                    self.log.err("'%s': could not switch to task branch", cfg['name'])
+                    self.log.err("'%s': could not switch to default branch", cfg['name'])
                     retcode = False
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
@@ -890,19 +947,24 @@ class Gmux(Repo):
 
 
 def parse_args():
-    global COMMAND
+    global COMMAND, ISDEBUG
+
+    valid_cmds = list(helpmsg.keys()) + ['help']
 
     parser = argparse.ArgumentParser(description="Git multiplexer")
     parser.add_argument("-e", "--env", help="environment name")
     parser.add_argument("-d", "--desk", help="desk name")
     parser.add_argument("-P", "--pgnbase", help="pgn directory base")
     parser.add_argument("-T", "--taskbase", help="task directory base")
-    parser.add_argument("cmd", default=default_cmd, nargs='?', type=str, help="subcommand")
+    parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode")
+    parser.add_argument("cmd", default=default_cmd, nargs='?', type=str,
+                         choices=valid_cmds, help="subcommand")
     parser.add_argument("taskids", type=str, nargs='*', help="task ID")
     args = parser.parse_args()
 
     # HOTFIX
     COMMAND = args.cmd
+    ISDEBUG = args.verbose
     return args
 
 def main():

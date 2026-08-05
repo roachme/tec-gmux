@@ -591,10 +591,7 @@ class Config(Log):
         return None
 
     def get(self, env):
-        if env not in self.config:
-            self.err("'%s': no gmux config for this env", env)
-            sys.exit(1)
-        return self._get_defaults(self.config[env])
+        return self._get_defaults(self.config.get(env, {}))
 
 
 class Unit:

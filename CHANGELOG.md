@@ -12,7 +12,7 @@
 - `gmux`: Refactor class Repo
 - `gmux`: Minor fixes
 - `gmux`: Fix exit code
-- `gmux`: Switch to default branch for command `update`
 - `gmux`: Fix fresh repo clone
+- `gmux`: Switch back to task branch after command `update`
 
 ### Deleted

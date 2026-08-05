@@ -934,8 +934,8 @@ class Gmux(Repo):
                 elif repo.branch_fastforward(cfg, branch_stored) == False:
                     retcode = False
                     self.log.err("'%s': could not merge task branch into default", cfg['name'])
-                elif repo.branch_switch(cfg, cfg['branch']) == False:
-                    self.log.err("'%s': could not switch to default branch", cfg['name'])
+                elif repo.branch_switch(cfg, branch_stored) == False:
+                    self.log.err("'%s': could not switch to task branch", cfg['name'])
                     retcode = False
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 

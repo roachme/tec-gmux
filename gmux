@@ -268,6 +268,10 @@ class Repo(Log):
                 submodule.update(init=True)
         return True
 
+    def submodules(self, cfg):
+        repo = pygit2.Repository(self.path + cfg['name'])
+        return [sm.path for sm in repo.submodules]
+
     def symlink(self, cfg, dst, taskid):
         dst = "/".join([dst, taskid])
         repo_src = self.path + cfg['name']
@@ -824,7 +828,6 @@ class Gmux(Repo):
         branch = Branch(self.settings['branchpatt'])
         repo = Repo(self.settings, self.args.taskbase)
 
-        # TODO: Execute the same for submodules if needed
         for taskid in self.taskids:
             if self.args.task_exist(taskid) is False:
                 retcode = False
@@ -844,7 +847,7 @@ class Gmux(Repo):
                     retcode = False
                     self.log.err("'%s': repo has uncommited changes", cfg['name'])
                 elif repo.branch_update(cfg, branch_stored, branch_generated) is False:
-                    self.log.err("'%s': could not update branch", "<REPO>")
+                    self.log.err("'%s': could not update branch", cfg['name'])
                     retcode = False
                 elif repo.branch_switch(cfg, branch_generated) == False:
                     self.log.err("'%s': could not switch to task branch", cfg['name'])
@@ -852,6 +855,26 @@ class Gmux(Repo):
                 elif repo.merge(cfg) == False:
                     self.log.err("'%s': could not merge branch", cfg['name'])
                     retcode = False
+                else:
+                    modules = { m['name']: m for m in cfg.get('modules', []) }
+                    for subpath in repo.submodules(cfg):
+                        subcfg = {
+                            **cfg,
+                            'name': "/".join([cfg['name'], subpath]),
+                            'branch': modules.get(subpath, {}).get('branch', cfg['branch']),
+                        }
+                        if repo.has_uncommited_changes(subcfg) == True:
+                            retcode = False
+                            self.log.err("'%s': submodule has uncommited changes", subcfg['name'])
+                        elif repo.branch_update(subcfg, branch_stored, branch_generated) is False:
+                            retcode = False
+                            self.log.err("'%s': could not update submodule branch", subcfg['name'])
+                        elif repo.branch_switch(subcfg, branch_generated) == False:
+                            retcode = False
+                            self.log.err("'%s': could not switch submodule to task branch", subcfg['name'])
+                        elif repo.merge(subcfg) == False:
+                            retcode = False
+                            self.log.err("'%s': could not merge submodule branch", subcfg['name'])
 
             if retcode == True and branch_stored != branch_generated:
                 unit.set({ 'branch' : branch_generated })

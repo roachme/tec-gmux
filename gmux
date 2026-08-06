@@ -283,9 +283,37 @@ class Repo(Log):
                 **cfg,
                 'name': "/".join([cfg['name'], subpath]),
                 'branch': modules.get(subpath, {}).get('branch', cfg['branch']),
+                'subpath': subpath,
             }
             for subpath in self.submodules(cfg)
         ]
+
+    # After a submodule's branch has moved, the parent repo's tree still
+    # pins the old submodule commit (git reports it as "modified content").
+    # Stage and commit the new pointer on whatever branch the parent
+    # currently has checked out, so the parent doesn't stay dirty forever.
+    def commit_submodule_pointer(self, cfg, subcfg):
+        reponame = cfg['name']
+        subpath = subcfg['subpath']
+        repo = pygit2.Repository(self.path + reponame)
+
+        if repo.status_file(subpath) == 0:
+            return True
+
+        try:
+            repo.index.add(subpath)
+            repo.index.write()
+            tree = repo.index.write_tree()
+            user = repo.default_signature
+            repo.create_commit(
+                'HEAD', user, user,
+                f"gmux: bump '{subpath}' submodule pointer",
+                tree, [repo.head.target],
+            )
+        except pygit2.GitError as e:
+            self.log.err("'%s': could not commit submodule pointer: %s", reponame, e)
+            return False
+        return True
 
     def symlink(self, cfg, dst, taskid):
         dst = "/".join([dst, taskid])
@@ -880,6 +908,9 @@ class Gmux(Repo):
                         elif repo.merge(subcfg) == False:
                             retcode = False
                             self.log.err("'%s': could not merge submodule branch", subcfg['name'])
+                        elif repo.commit_submodule_pointer(cfg, subcfg) == False:
+                            retcode = False
+                            self.log.err("'%s': could not commit submodule pointer update", subcfg['name'])
 
             if retcode == True and branch_stored != branch_generated:
                 unit.set({ 'branch' : branch_generated })
@@ -940,6 +971,9 @@ class Gmux(Repo):
                         elif repo.rebase(subcfg, subcfg['branch'], branch_generated) == False:
                             retcode = False
                             self.log.err("'%s': could not rebase submodule task branch against default branch", subcfg['name'])
+                        elif repo.commit_submodule_pointer(cfg, subcfg) == False:
+                            retcode = False
+                            self.log.err("'%s': could not commit submodule pointer update", subcfg['name'])
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
 
@@ -974,26 +1008,35 @@ class Gmux(Repo):
                 elif repo.rebase(cfg, cfg['branch'], branch_stored) == False:
                     retcode = False
                     self.log.err("'%s': could not rebase against default branch", cfg['name'])
-                elif repo.branch_fastforward(cfg, branch_stored) == False:
-                    retcode = False
-                    self.log.err("'%s': could not merge task branch into default", cfg['name'])
-                elif repo.branch_switch(cfg, branch_stored) == False:
-                    self.log.err("'%s': could not switch to task branch", cfg['name'])
-                    retcode = False
                 else:
+                    # Rebase/fast-forward/commit-pointer every submodule
+                    # *before* fast-forwarding the parent's default branch,
+                    # so the pointer bump is already part of the task branch
+                    # by the time the parent's default branch is caught up
+                    # to it.
+                    submodules_ok = True
                     for subcfg in repo.submodule_cfgs(cfg):
                         if repo.has_uncommited_changes(subcfg) == True:
-                            retcode = False
+                            submodules_ok = False
                             self.log.err("'%s': submodule has uncommited changes", subcfg['name'])
                         elif repo.rebase(subcfg, subcfg['branch'], branch_stored) == False:
-                            retcode = False
+                            submodules_ok = False
                             self.log.err("'%s': could not rebase submodule against default branch", subcfg['name'])
                         elif repo.branch_fastforward(subcfg, branch_stored) == False:
-                            retcode = False
+                            submodules_ok = False
                             self.log.err("'%s': could not merge submodule task branch into default", subcfg['name'])
-                        elif repo.branch_switch(subcfg, branch_stored) == False:
-                            retcode = False
-                            self.log.err("'%s': could not switch submodule to task branch", subcfg['name'])
+                        elif repo.commit_submodule_pointer(cfg, subcfg) == False:
+                            submodules_ok = False
+                            self.log.err("'%s': could not commit submodule pointer update", subcfg['name'])
+
+                    if submodules_ok is False:
+                        retcode = False
+                    elif repo.branch_fastforward(cfg, branch_stored) == False:
+                        retcode = False
+                        self.log.err("'%s': could not merge task branch into default", cfg['name'])
+                    elif repo.branch_switch(cfg, branch_stored) == False:
+                        retcode = False
+                        self.log.err("'%s': could not switch to task branch", cfg['name'])
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
     def issue(self):

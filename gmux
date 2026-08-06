@@ -920,8 +920,8 @@ class Gmux(Repo):
                 elif repo.merge(cfg) == False:
                     self.log.err("'%s': could not merge to default branch", cfg['name'])
                     retcode = False
-                elif repo.branch_switch(cfg, branch_generated) == False:
-                    self.log.err("'%s': could not switch to task branch", cfg['name'])
+                elif repo.rebase(cfg, cfg['branch'], branch_generated) == False:
+                    self.log.err("'%s': could not rebase task branch against default branch", cfg['name'])
                     retcode = False
                 else:
                     for subcfg in repo.submodule_cfgs(cfg):
@@ -937,9 +937,9 @@ class Gmux(Repo):
                         elif repo.merge(subcfg) == False:
                             retcode = False
                             self.log.err("'%s': could not merge submodule to default branch", subcfg['name'])
-                        elif repo.branch_switch(subcfg, branch_generated) == False:
+                        elif repo.rebase(subcfg, subcfg['branch'], branch_generated) == False:
                             retcode = False
-                            self.log.err("'%s': could not switch submodule to task branch", subcfg['name'])
+                            self.log.err("'%s': could not rebase submodule task branch against default branch", subcfg['name'])
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
 

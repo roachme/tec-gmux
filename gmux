@@ -272,6 +272,21 @@ class Repo(Log):
         repo = pygit2.Repository(self.path + cfg['name'])
         return [sm.path for sm in repo.submodules]
 
+    # Build a cfg-like dict per submodule, with 'name' resolved to its path
+    # relative to self.path and 'branch' taken from cfg['modules'] (falling
+    # back to the parent's default branch), so submodules can be driven
+    # through the same repo methods as top-level repos.
+    def submodule_cfgs(self, cfg):
+        modules = { m['name']: m for m in cfg.get('modules', []) }
+        return [
+            {
+                **cfg,
+                'name': "/".join([cfg['name'], subpath]),
+                'branch': modules.get(subpath, {}).get('branch', cfg['branch']),
+            }
+            for subpath in self.submodules(cfg)
+        ]
+
     def symlink(self, cfg, dst, taskid):
         dst = "/".join([dst, taskid])
         repo_src = self.path + cfg['name']
@@ -515,18 +530,11 @@ class Repo(Log):
 
     def _has_uncommited_changes(self, reponame):
         repo = pygit2.Repository(self.path + reponame)
-        for cfg in self.config['repos']:
-            status = repo.status()
-            if cfg['name'] == reponame and bool(status) == True:
-                return True
-        return False
+        return bool(repo.status())
 
     def _branch_exist(self, reponame, branchname):
         repo = pygit2.Repository(self.path + reponame)
-        for cfg in self.config['repos']:
-            if cfg['name'] == reponame and branchname in repo.branches:
-                return True
-        return False
+        return branchname in repo.branches
 
     # Create local branch from remote branch.
     # It is usefull when cloning new repo
@@ -547,24 +555,18 @@ class Repo(Log):
 
     def _branch_create(self, reponame, new_branch_name, src_branch_name):
         repo = pygit2.Repository(self.path + reponame)
-        for cfg in self.config['repos']:
-            if cfg['name'] == reponame:
-                if self.__create_branch_from_remote(reponame, src_branch_name) is False:
-                    print(f"'{src_branch_name}': could not find it neither locally nor remotely in {reponame}")
-                    return False
-                src_branch = repo.branches[src_branch_name]
-                new_branch = repo.branches.local.create(new_branch_name, repo[src_branch.target])
-                return True
-        return False
+        if self.__create_branch_from_remote(reponame, src_branch_name) is False:
+            print(f"'{src_branch_name}': could not find it neither locally nor remotely in {reponame}")
+            return False
+        src_branch = repo.branches[src_branch_name]
+        new_branch = repo.branches.local.create(new_branch_name, repo[src_branch.target])
+        return True
 
     def _branch_rename(self, reponame, old_branch, new_branch):
         repo = pygit2.Repository(self.path + reponame)
-        for cfg in self.config['repos']:
-            if cfg['name'] == reponame:
-                branch = repo.branches.local[old_branch]
-                branch.rename(new_branch)
-                return True
-        return False
+        branch = repo.branches.local[old_branch]
+        branch.rename(new_branch)
+        return True
 
 class Config(Log):
     def __init__(self):
@@ -761,7 +763,6 @@ class Gmux(Repo):
         unit = Unit(dst)
         repo = Repo(self.settings, self.args.taskbase)
 
-        # TODO: Execute the same for submodules if needed
         for taskid in self.taskids:
             if self.args.task_exist(taskid) is False:
                 retcode = False
@@ -775,7 +776,17 @@ class Gmux(Repo):
                 if repo.symlink(cfg, dst, taskid) is False:
                     retcode = False
                     self.log.err("'%s': could not create symlink", cfg['name'])
-                elif repo.branch_remove(cfg, branch_stored) == False:
+                    continue
+
+                # Read submodules before removing the parent's task branch,
+                # since that switches the parent back to its default branch
+                # and may change (or drop) which submodules are checked out.
+                for subcfg in repo.submodule_cfgs(cfg):
+                    if repo.branch_remove(subcfg, branch_stored) == False:
+                        retcode = False
+                        self.log.err("'%s': could not remove submodule task branch", subcfg['name'])
+
+                if repo.branch_remove(cfg, branch_stored) == False:
                     retcode = False
                     self.log.err("'%s': could not remove task branch", cfg['name'])
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
@@ -856,13 +867,7 @@ class Gmux(Repo):
                     self.log.err("'%s': could not merge branch", cfg['name'])
                     retcode = False
                 else:
-                    modules = { m['name']: m for m in cfg.get('modules', []) }
-                    for subpath in repo.submodules(cfg):
-                        subcfg = {
-                            **cfg,
-                            'name': "/".join([cfg['name'], subpath]),
-                            'branch': modules.get(subpath, {}).get('branch', cfg['branch']),
-                        }
+                    for subcfg in repo.submodule_cfgs(cfg):
                         if repo.has_uncommited_changes(subcfg) == True:
                             retcode = False
                             self.log.err("'%s': submodule has uncommited changes", subcfg['name'])
@@ -889,7 +894,6 @@ class Gmux(Repo):
         branch = Branch(self.settings['branchpatt'])
         repo = Repo(self.settings, self.args.taskbase)
 
-        # TODO: Execute the same for submodules if needed
         for taskid in self.taskids:
             if self.args.task_exist(taskid) is False:
                 retcode = False
@@ -919,6 +923,23 @@ class Gmux(Repo):
                 elif repo.branch_switch(cfg, branch_generated) == False:
                     self.log.err("'%s': could not switch to task branch", cfg['name'])
                     retcode = False
+                else:
+                    for subcfg in repo.submodule_cfgs(cfg):
+                        if repo.has_uncommited_changes(subcfg) == True:
+                            retcode = False
+                            self.log.err("'%s': submodule has uncommited changes", subcfg['name'])
+                        elif repo.branch_switch_default(subcfg) is False:
+                            retcode = False
+                            self.log.err("'%s': could not switch submodule to default branch", subcfg['name'])
+                        elif repo.fetch(subcfg) == False:
+                            retcode = False
+                            self.log.err("'%s': could not fetch submodule changes", subcfg['name'])
+                        elif repo.merge(subcfg) == False:
+                            retcode = False
+                            self.log.err("'%s': could not merge submodule to default branch", subcfg['name'])
+                        elif repo.branch_switch(subcfg, branch_generated) == False:
+                            retcode = False
+                            self.log.err("'%s': could not switch submodule to task branch", subcfg['name'])
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
 
@@ -928,7 +949,6 @@ class Gmux(Repo):
         unit = Unit(dst)
         repo = Repo(self.settings, self.args.taskbase)
 
-        # TODO: Execute the same for submodules if needed
         for taskid in self.taskids:
             if self.args.task_exist(taskid) is False:
                 retcode = False
@@ -960,6 +980,20 @@ class Gmux(Repo):
                 elif repo.branch_switch(cfg, branch_stored) == False:
                     self.log.err("'%s': could not switch to task branch", cfg['name'])
                     retcode = False
+                else:
+                    for subcfg in repo.submodule_cfgs(cfg):
+                        if repo.has_uncommited_changes(subcfg) == True:
+                            retcode = False
+                            self.log.err("'%s': submodule has uncommited changes", subcfg['name'])
+                        elif repo.rebase(subcfg, subcfg['branch'], branch_stored) == False:
+                            retcode = False
+                            self.log.err("'%s': could not rebase submodule against default branch", subcfg['name'])
+                        elif repo.branch_fastforward(subcfg, branch_stored) == False:
+                            retcode = False
+                            self.log.err("'%s': could not merge submodule task branch into default", subcfg['name'])
+                        elif repo.branch_switch(subcfg, branch_stored) == False:
+                            retcode = False
+                            self.log.err("'%s': could not switch submodule to task branch", subcfg['name'])
         return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
     def issue(self):

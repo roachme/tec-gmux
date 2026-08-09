@@ -308,17 +308,29 @@ class Repo(Log):
         repo = pygit2.Repository(self.path + cfg['name'])
         return [sm.path for sm in repo.submodules]
 
+    # A submodule's own default branch: an explicit override from
+    # cfg['modules'] wins; otherwise ask the submodule's own remote what
+    # its default branch is (a submodule commonly points at a different
+    # repo than its parent, so the parent's default branch is not a safe
+    # assumption); falling back to the parent's default branch only if
+    # the submodule has no discoverable remote HEAD (e.g. offline clone).
+    def submodule_default_branch(self, cfg, subpath, override):
+        if override is not None:
+            return override
+        reponame = "/".join([cfg['name'], subpath])
+        repo = pygit2.Repository(self.path + reponame)
+        return self.branch_get_default(repo) or cfg['branch']
+
     # Build a cfg-like dict per submodule, with 'name' resolved to its path
-    # relative to self.path and 'branch' taken from cfg['modules'] (falling
-    # back to the parent's default branch), so submodules can be driven
-    # through the same repo methods as top-level repos.
+    # relative to self.path and 'branch' resolved via submodule_default_branch(),
+    # so submodules can be driven through the same repo methods as top-level repos.
     def submodule_cfgs(self, cfg):
         modules = { m['name']: m for m in cfg.get('modules', []) }
         return [
             {
                 **cfg,
                 'name': "/".join([cfg['name'], subpath]),
-                'branch': modules.get(subpath, {}).get('branch', cfg['branch']),
+                'branch': self.submodule_default_branch(cfg, subpath, modules.get(subpath, {}).get('branch')),
                 'subpath': subpath,
             }
             for subpath in self.submodules(cfg)

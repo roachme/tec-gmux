@@ -5,6 +5,7 @@
 - `gmux`: Add help message for gmux
 - `gmux`: Add new command `update`
 - `gmux`: Add new command `commit`
+- `gmux`: Resolve each submodule's own default branch (auto-detected from its remote HEAD, overridable per-submodule via `modules` in config) instead of assuming the parent repo's default branch
 
 ### Changed
 

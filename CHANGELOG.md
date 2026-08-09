@@ -4,6 +4,7 @@
 
 - `gmux`: Add help message for gmux
 - `gmux`: Add new command `update`
+- `gmux`: Add new command `commit`
 
 ### Changed
 

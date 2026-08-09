@@ -33,6 +33,30 @@ default_cmd = "show"
 
 
 helpmsg = {
+    'commit': {
+        'tag' : "basic",
+        'synop': "Usage: tec gmux commit -m MSG [OPTION]... [ID]...",
+        'desc_short': "Commit changes on task branch.",
+        'desc_long':
+        """
+     Options:
+       -h        show help message and exit
+       -m MSG    commit message (required)
+       -v        verbose mode
+
+     Arguments:
+       ID        Task ID, if not passed then current task ID is used
+
+     Notes:
+       The commit message is built from each repo's 'commitpatt' (see
+       gmux.json), with ID replaced by the task ID, PART by the repo's
+       (or submodule's) name, and MSG by the message given with -m.
+       Repos with no uncommitted changes are skipped.
+
+     Exit status:
+       Under development
+        """,
+    },
     'remove': {
         'tag' : "basic",
         'synop': "Usage: tec gmux rm [OPTION]... [ID]...",
@@ -324,6 +348,28 @@ class Repo(Log):
             )
         except pygit2.GitError as e:
             self.log.err("'%s': could not commit submodule pointer: %s", reponame, e)
+            return False
+        return True
+
+    # Stage all changes in the repo and commit them, with the commit
+    # message built from cfg['commitpatt'] (falling back to a bare
+    # MSG pattern if the repo has none configured).
+    def commit(self, cfg, taskid, part, message):
+        reponame = cfg['name']
+        repo = pygit2.Repository(self.path + reponame)
+        pattern = cfg.get('commitpatt', "MSG")
+        commit_message = pattern.replace("ID", taskid).replace("PART", part).replace("MSG", message)
+
+        try:
+            repo.index.add_all()
+            repo.index.write()
+            tree = repo.index.write_tree()
+            user = repo.default_signature
+            repo.create_commit(
+                'HEAD', user, user, commit_message, tree, [repo.head.target],
+            )
+        except pygit2.GitError as e:
+            self.log.err("'%s': could not commit changes: %s", reponame, e)
             return False
         return True
 
@@ -770,10 +816,11 @@ class TecArgs(Log):
         return os.path.exists(dir)
 
 class Gmux(Repo):
-    def __init__(self, taskbase, env, desk, taskids):
+    def __init__(self, taskbase, env, desk, taskids, message=None):
         self.log = Log()
         self.taskids = taskids
         self.taskbase = taskbase
+        self.message = message
         self.suffix_dir = ".tec/pgn"
         self.suffix_unit = self.suffix_dir + "/" + "gmux"
         self.args = TecArgs(self.taskbase)
@@ -794,8 +841,57 @@ class Gmux(Repo):
         return "/".join([self.args.taskbase, self.args.env, self.args.desk])
 
     def commit(self):
-        retcode = 1
-        return retcode
+        if not self.message:
+            self.log.err("commit message is required, use -m")
+            return GMUX_FAILURE
+
+        retcode = True
+        dst = self._getpath()
+        unit = Unit(dst)
+        repo = Repo(self.settings, self.args.taskbase)
+
+        for taskid in self.taskids:
+            if self.args.task_exist(taskid) is False:
+                retcode = False
+                self.log.err("'%s': no such task ID", taskid)
+                continue
+
+            units = unit.getall(taskid)
+            branch_stored = units.get('branch')
+
+            if branch_stored is None:
+                retcode = False
+                self.log.err("'%s': no task branch stored yet, run 'sync' first", taskid)
+                continue
+
+            for cfg in self.settings['repos']:
+                if repo.symlink(cfg, dst, taskid) is False:
+                    retcode = False
+                    self.log.err("'%s': could not create symlink", cfg['name'])
+                    continue
+
+                if repo.has_uncommited_changes(cfg) == False:
+                    self.log.info("'%s': nothing to commit", cfg['name'])
+                elif repo.branch_switch(cfg, branch_stored) == False:
+                    retcode = False
+                    self.log.err("'%s': could not switch to task branch", cfg['name'])
+                elif repo.commit(cfg, taskid, cfg['name'], self.message) == False:
+                    retcode = False
+                    self.log.err("'%s': could not commit changes", cfg['name'])
+
+                for subcfg in repo.submodule_cfgs(cfg):
+                    if repo.has_uncommited_changes(subcfg) == False:
+                        continue
+                    elif repo.branch_switch(subcfg, branch_stored) == False:
+                        retcode = False
+                        self.log.err("'%s': could not switch submodule to task branch", subcfg['name'])
+                    elif repo.commit(subcfg, taskid, subcfg['subpath'], self.message) == False:
+                        retcode = False
+                        self.log.err("'%s': could not commit submodule changes", subcfg['name'])
+                    elif repo.commit_submodule_pointer(cfg, subcfg) == False:
+                        retcode = False
+                        self.log.err("'%s': could not commit submodule pointer update", subcfg['name'])
+        return GMUX_SUCCESS if retcode == True else GMUX_FAILURE
 
     def remove(self):
         retcode = True
@@ -1065,6 +1161,7 @@ def parse_args():
     parser.add_argument("-d", "--desk", help="desk name")
     parser.add_argument("-P", "--pgnbase", help="pgn directory base")
     parser.add_argument("-T", "--taskbase", help="task directory base")
+    parser.add_argument("-m", "--message", help="commit message")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose mode")
     parser.add_argument("cmd", default=default_cmd, nargs='?', type=str,
                          choices=valid_cmds, help="subcommand")
@@ -1079,7 +1176,7 @@ def parse_args():
 def main():
     log = Log()
     args = parse_args()
-    gmux = Gmux(args.taskbase, args.env, args.desk, args.taskids)
+    gmux = Gmux(args.taskbase, args.env, args.desk, args.taskids, args.message)
     cmd = getattr(gmux, args.cmd, None)
 
     if cmd is not None:

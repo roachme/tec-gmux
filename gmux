@@ -365,12 +365,28 @@ class Repo(Log):
             return False
         return True
 
+    # Work out which subdirectory the pending changes actually touch, so
+    # PART in the commit message can point at that instead of always the
+    # whole repo/submodule name. Falls back to `fallback` when changes
+    # touch root-level files or span multiple top-level directories (i.e.
+    # there is no single common parent to point at).
+    def changed_part(self, reponame, fallback):
+        repo = pygit2.Repository(self.path + reponame)
+        paths = list(repo.status().keys())
+        if not paths:
+            return fallback
+        dirs = [os.path.dirname(p) for p in paths]
+        if not all(dirs):
+            return fallback
+        return os.path.commonpath(dirs) or fallback
+
     # Stage all changes in the repo and commit them, with the commit
     # message built from cfg['commitpatt'] (falling back to a bare
     # MSG pattern if the repo has none configured).
     def commit(self, cfg, taskid, part, message):
         reponame = cfg['name']
         repo = pygit2.Repository(self.path + reponame)
+        part = self.changed_part(reponame, part)
         pattern = cfg.get('commitpatt', "MSG")
         commit_message = pattern.replace("ID", taskid).replace("PART", part).replace("MSG", message)
 

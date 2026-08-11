@@ -35,13 +35,14 @@ default_cmd = "show"
 helpmsg = {
     'commit': {
         'tag' : "basic",
-        'synop': "Usage: tec gmux commit -m MSG [OPTION]... [ID]...",
+        'synop': "Usage: tec gmux commit [OPTION]... [ID]...",
         'desc_short': "Commit changes on task branch.",
         'desc_long':
         """
      Options:
        -h        show help message and exit
-       -m MSG    commit message (required)
+       -m MSG    commit message (optional, defaults to the 'desc' key
+                 stored in the task's .tec/units file)
        -v        verbose mode
 
      Arguments:
@@ -50,7 +51,8 @@ helpmsg = {
      Notes:
        The commit message is built from each repo's 'commitpatt' (see
        gmux.json), with ID replaced by the task ID, PART by the repo's
-       (or submodule's) name, and MSG by the message given with -m.
+       (or submodule's) name, and MSG by the message given with -m, or,
+       if -m is not given, by the 'desc' key from the task's .tec/units.
        Repos with no uncommitted changes are skipped.
 
      Exit status:
@@ -853,10 +855,6 @@ class Gmux(Repo):
         return "/".join([self.args.taskbase, self.args.env, self.args.desk])
 
     def commit(self):
-        if not self.message:
-            self.log.err("commit message is required, use -m")
-            return GMUX_FAILURE
-
         retcode = True
         dst = self._getpath()
         unit = Unit(dst)
@@ -870,10 +868,16 @@ class Gmux(Repo):
 
             units = unit.getall(taskid)
             branch_stored = units.get('branch')
+            message = self.message or units.get('desc')
 
             if branch_stored is None:
                 retcode = False
                 self.log.err("'%s': no task branch stored yet, run 'sync' first", taskid)
+                continue
+
+            if not message:
+                retcode = False
+                self.log.err("'%s': no commit message given and no 'desc' stored, use -m", taskid)
                 continue
 
             for cfg in self.settings['repos']:
@@ -887,7 +891,7 @@ class Gmux(Repo):
                 elif repo.branch_switch(cfg, branch_stored) == False:
                     retcode = False
                     self.log.err("'%s': could not switch to task branch", cfg['name'])
-                elif repo.commit(cfg, taskid, cfg['name'], self.message) == False:
+                elif repo.commit(cfg, taskid, cfg['name'], message) == False:
                     retcode = False
                     self.log.err("'%s': could not commit changes", cfg['name'])
 
@@ -897,7 +901,7 @@ class Gmux(Repo):
                     elif repo.branch_switch(subcfg, branch_stored) == False:
                         retcode = False
                         self.log.err("'%s': could not switch submodule to task branch", subcfg['name'])
-                    elif repo.commit(subcfg, taskid, subcfg['subpath'], self.message) == False:
+                    elif repo.commit(subcfg, taskid, subcfg['subpath'], message) == False:
                         retcode = False
                         self.log.err("'%s': could not commit submodule changes", subcfg['name'])
                     elif repo.commit_submodule_pointer(cfg, subcfg) == False:

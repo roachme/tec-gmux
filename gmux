@@ -639,6 +639,12 @@ class Repo(Log):
                 return self._branch_create(reponame, oldbranch, branch)
             return True
         elif oldbranch is not None:
+            if self._branch_exist(reponame, oldbranch) == False:
+                self.log.debug("'%s': stored task branch '%s' no longer exists",
+                             reponame, oldbranch)
+                if self._branch_exist(reponame, newbranch) == False:
+                    return self._branch_create(reponame, newbranch, branch)
+                return True
             return self._branch_rename(reponame, oldbranch, newbranch)
         elif self._branch_exist(reponame, newbranch) == False:
             return self._branch_create(reponame, newbranch, branch)

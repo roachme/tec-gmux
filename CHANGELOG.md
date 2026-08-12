@@ -16,5 +16,6 @@
 - `gmux`: Fix exit code
 - `gmux`: Fix fresh repo clone
 - `gmux`: Switch back to task branch after command `update`
+- `gmux`: Fix non-existing task branch
 
 ### Deleted
